@@ -766,8 +766,17 @@ classdef Experiment < handle & matlab.mixin.Copyable
 %                 warning('results table is empty, nothing to do')
                 return
             end
-            
-            if createNewFig
+
+            figID=[];
+            if ~createNewFig %check if fig exists
+                for i=1:length(expt.fig_handles)
+                    if expt.fig_handles(i).UserData{1}=="results"
+                        figID=expt.fig_handles(i);
+                        break
+                    end
+                end
+            end
+            if isempty(figID)
                 figID=gcf; %uses current figure, or creates one if no figs
                 figID.Name=strcat('Result Table: ',expt.filename);
                 figID.NumberTitle='off';
@@ -778,15 +787,8 @@ classdef Experiment < handle & matlab.mixin.Copyable
                 if ~ismember(figID,expt.fig_handles)
                     expt.fig_handles(end+1)=figID; %register the new fig with expt
                 end
-            else
-                for i=1:length(expt.fig_handles)
-                    if expt.fig_handles(i).UserData{1}=="results"
-                        figID=expt.fig_handles(i);
-                        break
-                    end
-                end
-                figure(figID);
             end
+            figure(figID);
             
             colnames=[{'Trace'};{'Group'};{'Segment'};{'Include'};fieldnames(expt.segment(1).features_trace)];
 %             colnames=[{'Trace'};{'Segment'};{'Include'};fieldnames(expt.segment(1).features_trace)];
