@@ -120,6 +120,7 @@ classdef Experiment < handle & matlab.mixin.Copyable
         averageParam=[]
         
         featureMethod='none'
+        featuresPerSegment=true
         featureParam={}
         featureExtras={}
         
@@ -205,6 +206,13 @@ classdef Experiment < handle & matlab.mixin.Copyable
             
             DT=mode(diff(time)); 
 
+
+            isAllZero=all(Xraw==0,1);
+            if any(isAllZero)
+                expt.notes=[expt.notes,{'removed all zero column(s)'}];
+                Xraw(:,isAllZero)=[];
+            end
+
             %interpolate any missing data using neighboring time points
             %TODO: make this optional?
             
@@ -245,12 +253,15 @@ classdef Experiment < handle & matlab.mixin.Copyable
             %TODO: DT as parameter (for same DT across expts)
             % - alt, make this a method with DT parameter
             
-            ti=0:DT:time(end); ti=ti';
-            XI=zeros(length(ti),size(Xraw,2));
-            for j=1:size(Xraw,2)
-                XI(:,j)=interp1(time,Xraw(:,j),ti,'pchip');
-            end
+%             ti=0:DT:time(end); ti=ti';
+%             XI=zeros(length(ti),size(Xraw,2));
+%             for j=1:size(Xraw,2)
+%                 XI(:,j)=interp1(time,Xraw(:,j),ti,'pchip');
+%             end
             
+            ti=time;
+            XI=Xraw;
+
             expt.t=ti;
             expt.X=XI;
             
@@ -548,15 +559,17 @@ classdef Experiment < handle & matlab.mixin.Copyable
             expt.featureExtras=varargin;
         end
         
-        function compute_features(expt,method,methodpar,varargin)
+        function compute_features(expt,method,methodpar,featuresPerSegment,varargin)
             if nargin>1
             expt.featureMethod=method;
             expt.featureParam=methodpar;
+            expt.featuresPerSegment=featuresPerSegment;
             expt.featureExtras=varargin;
             end
             if ~strcmp(expt.featureMethod,'none')
             expt.detect_periods();
             expt.periodogram();
+            expt.computeSegmentStats();
             expt.fnames_periods=fieldnames(expt.segment(1).features_periods)';
             expt.fnames_trace=fieldnames(expt.segment(1).features_trace)';
             expt.buildResultsTable();
@@ -718,8 +731,9 @@ classdef Experiment < handle & matlab.mixin.Copyable
                 end
             end
             
-%             expt.xfeature=xname;
-%             expt.yfeature=yname;
+            expt.xfeature=xname;
+            expt.yfeature=yname;
+            expt.featurePlotType=featPlotType;
             
             %interactive figure: set up callbacks
             if doInteractive
@@ -983,32 +997,57 @@ classdef Experiment < handle & matlab.mixin.Copyable
 %             expt.featureExtras=varargin{:};
             
             %TODO: per-segment toggle
-
             extras=expt.featureExtras;
-            for i=1:expt.nS
-                thisIx=expt.segment(i).ix;
-                
-%                 ix=find(thisIx,5,'first'); %exclude k first time points
-%                 thisIx(ix)=false;
-                
-                tt=expt.t(thisIx);
-                xx=expt.Xfilt(thisIx,:);
+            if expt.featuresPerSegment
+                for i=1:expt.nS
+                    thisIx=expt.segment(i).ix;
+                    tt=expt.t(thisIx);
+                    xx=expt.Xfilt(thisIx,:);
+                    switch expt.featureMethod
+                        case {'peaks'}
+                            delta=expt.featureParam;
+    %                         if length(varargin)>1, extras=varargin(2:end); end
+                            [F, Fdist, points, fcns]=peak_detector(tt,xx,delta,extras{:});
+    
+                        case {'threshold'}
+                            frac=expt.featureParam;
+    %                         if length(varargin)>1, extras=varargin(2:end); end
+                            [F, Fdist, points, fcns]=plateau_detector(tt,xx,frac,extras{:});
+                    end
+                    
+                    expt.segment(i).points=points;
+                    expt.segment(i).features_periods=Fdist;
+                    expt.segment(i).features_trace=F;
+                end
+            else
                 switch expt.featureMethod
                     case {'peaks'}
                         delta=expt.featureParam;
-%                         if length(varargin)>1, extras=varargin(2:end); end
-                        [F, Fdist, points, fcns]=peak_detector(tt,xx,delta,extras{:});
+                        [F, Fdist, points, fcns]=peak_detector(expt.t,expt.Xfilt,delta,extras{:});
 
                     case {'threshold'}
                         frac=expt.featureParam;
-%                         if length(varargin)>1, extras=varargin(2:end); end
-                        [F, Fdist, points, fcns]=plateau_detector(tt,xx,frac,extras{:});
+                        [F, Fdist, points, fcns]=plateau_detector(expt.t,expt.Xfilt,frac,extras{:});
                 end
-                
-                expt.segment(i).points=points;
-                expt.segment(i).features_periods=Fdist;
-                expt.segment(i).features_trace=F;
+
+                fun=@(x) ([x.period(:).t(1:end-1)]+[x.period(:).t(2:end)])/2;
+                xall=arrayfun(fun, points, 'UniformOutput', false);
+
+                for i=1:expt.nS
+                    ep=expt.segment(i).endpoints;
+                    inseg=cellfun(@(x)x>ep(1)&x<ep(2),xall, 'UniformOutput', false);
+                    expt.segment(i).points=points;
+                    expt.segment(i).features_periods=Fdist;
+                    expt.segment(i).features_trace=F;
+%                     for j=1:expt.nX
+%                         expt.segment(i).points(j)=points(inseg{j});
+%                     end
+
+                end
+
+%                 xall=[xall{:}];
             end
+
             expt.featureFcn=fcns.compute_features;
         end
         
@@ -1068,6 +1107,41 @@ classdef Experiment < handle & matlab.mixin.Copyable
             expt.f=F; %frquency vector
         end
         
+        function computeSegmentStats(expt)
+            %mean, quartiles, AUC
+            for i=1:expt.nS
+                thisseg=expt.segment(i).ix;
+                tt=expt.t(thisseg);
+                XX=expt.Xdetrend(thisseg,expt.includeT);
+
+                M=mean(XX,1);
+                S=std(XX,0,1);
+                PTILE=prctile(XX,[0,25,50,75,100],1);
+
+                AUC=trapz(tt,XX,1);
+                %normalize to duration of the segment
+                % - isn't this just the mean????
+                AUC=AUC/diff(expt.segment(i).endpoints);
+
+                M=num2cell(M);
+                S=num2cell(S);
+                PTILE0=num2cell(PTILE(1,:));
+                PTILE25=num2cell(PTILE(2,:));
+                PTILE50=num2cell(PTILE(3,:));
+                PTILE75=num2cell(PTILE(4,:));
+                PTILE100=num2cell(PTILE(5,:));
+                AUC=num2cell(AUC);
+                [expt.segment(i).features_trace.mean]=M{:};
+                [expt.segment(i).features_trace.stdev]=S{:};
+                [expt.segment(i).features_trace.min]=PTILE0{:};
+                [expt.segment(i).features_trace.q1]=PTILE25{:};
+                [expt.segment(i).features_trace.median]=PTILE50{:};
+                [expt.segment(i).features_trace.q3]=PTILE75{:};
+                [expt.segment(i).features_trace.max]=PTILE100{:};
+                [expt.segment(i).features_trace.AUC]=AUC{:};
+            end
+        end
+
         
         %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
         % Plotting functions
@@ -1142,7 +1216,7 @@ classdef Experiment < handle & matlab.mixin.Copyable
                 x(segstart)=nan;
                 
                 hxall=findobj(ax.Children,'tag','xall_line');
-                for i=1:size(xall,2);
+                for i=1:size(xall,2)
                     set(hxall(i),'XData',tt,'YData',xall(:,i))
                 end
                 
@@ -1226,7 +1300,7 @@ classdef Experiment < handle & matlab.mixin.Copyable
                     end
                 end
 %                 
-                axis(ax,'tight')
+                ax.XLim=[min(expt.t),max(expt.t)];
                 ax.YLabel.String="X_{"+whichPlot+"}"+num2str(expt.tix);
                 
                 endpoints=[expt.segment(:).endpoints];
@@ -1303,8 +1377,7 @@ classdef Experiment < handle & matlab.mixin.Copyable
                     yallix=[yallix,e*ones(size(thise))];
                     includeix=[includeix,expt.include(e)*ones(size(thise))];
                 end
-                INCIX{i}=logical(includeix);
-%                 y=expt.segment(i).features_periods(expt.tix).(yfeat);
+
                 y=yall(yallix==expt.tix);
                 if isempty(y)
                     return
@@ -1313,17 +1386,16 @@ classdef Experiment < handle & matlab.mixin.Copyable
                 switch expt.xfeature
                     case {'t'}
                         %TODO: option for marker location?
-                         xall=([expt.segment(i).points(:).period.t(1:end-1)]+[expt.segment(i).points(:).period.t(2:end)])/2;
-%                          x=xall(yallix==expt.tix);
-%                          x=(expt.segment(i).points(expt.tix).period.t(1:end-1)+expt.segment(i).points(expt.tix).period.t(2:end))/2; %midpoint of period
-%                         x=expt.segment(i).points(expt.tix).max.t;
-%                         x=expt.segment(i).points(expt.tix).min.t(1:end-1); %first min
-%                         x=expt.segment(i).points(expt.tix).min.t(2:end); %second min
-%                         x=expt.segment(i).points(expt.tix).down.t;
-%                         x=expt.segment(i).points(expt.tix).up.t;
-%                         x=(expt.segment(i).points(expt.tix).down.t+expt.segment(i).points(expt.tix).period.t(2:end))/2; %midpoint of silent post active
-%                         x=(expt.segment(i).points(expt.tix).up.t+expt.segment(i).points(expt.tix).period.t(1:end-1))/2; %midpoint of silent pre active   
-                        
+                        fun=@(x) ([x.period(:).t(1:end-1)]+[x.period(:).t(2:end)])/2;
+                        xall=arrayfun(fun, expt.segment(i).points, 'UniformOutput', false);
+                        xall=[xall{:}];
+
+                        %omit period=0
+                        per=[expt.segment(i).features_periods(:).period];
+                        yall(per==0)=[];
+                        yallix(per==0)=[];
+                        includeix(per==0)=[];
+
                     case {'segment'}
                         %TODO: option for violin plot, boxplot?
                         rng(42)
@@ -1349,14 +1421,16 @@ classdef Experiment < handle & matlab.mixin.Copyable
                 YY{i}=y;
                 XXall{i}=xall;
                 YYall{i}=yall;
+                INCIX{i}=logical(includeix);
 
             end
                           
             
             hl=matlab.graphics.chart.primitive.Line.empty(expt.nS,0);
+            hl2=matlab.graphics.chart.primitive.Line.empty(expt.nS-1,0);
             for i=1:expt.nS
                 col=ax.ColorOrder(mod(i-1,length(ax.ColorOrder(:,1)))+1,:);
-                if ~isempty(XXall{i})
+                if ~isempty(XXall{i})&&~isempty(INCIX{i})
                     line(XXall{i}(INCIX{i}),YYall{i}(INCIX{i}),'marker','o','linestyle','none',...
                         'color',0.75*[1,1,1],'tag','oscar_line');
                     line(XXall{i}(~INCIX{i}),YYall{i}(~INCIX{i}),'marker','x','linestyle','none',...
@@ -1364,11 +1438,16 @@ classdef Experiment < handle & matlab.mixin.Copyable
                 end
                 if ~isempty(XX{i})
                     if (expt.include(expt.tix))
-                    hl(i,1)=line(XX{i},YY{i},'marker','o','linestyle','none',...
+                    hl(i,1)=line(XX{i},YY{i},'marker','o','linestyle','-',...
                         'color',col,'tag','oscar_line');
                     else
-                    hl(i,1)=line(XX{i},YY{i},'marker','x','linestyle','none',...
+                    hl(i,1)=line(XX{i},YY{i},'marker','x','linestyle','-',...
                         'color',col,'tag','oscar_line');
+                    end
+                    if i<expt.nS
+                        hl2(i,1)=line([XX{i}(end),XX{i+1}(1)],[YY{i}(end),YY{i+1}(1)], ...
+                            'marker','none','linestyle','-',...
+                            'color',col,'tag','oscar_line');
                     end
                 end
             end
@@ -1402,7 +1481,7 @@ classdef Experiment < handle & matlab.mixin.Copyable
                         
                     case {'segment'} %TODO: do jitter here?
                         xticks(1:expt.nS)
-                        xticklabels({expt.segment.name})
+                        xticklabels([expt.segment(:).name])
                         xlim([0.5,expt.nS+0.5])
             end
             
@@ -1700,12 +1779,15 @@ classdef Experiment < handle & matlab.mixin.Copyable
             function launchFeatureUpdate(~,~)
                 
                 for i=1:length(expt.fig_handles)
-                    if strcmp(expt.fig_handles(i).UserData,'feature')
+                    if strcmp(expt.fig_handles(i).UserData{1},'feature')
+                        expt.fig_handles(i).UserData{2}=expt.xfeature;
+                        expt.fig_handles(i).UserData{3}=expt.yfeature;
+                        expt.fig_handles(i).UserData{4}=expt.featurePlotType;
                         expt.active_fig=expt.fig_handles(i);
+                        expt.updatePlots('feature')
                     end
                 end
                 
-                expt.updatePlots('feature')
             end
             
             function changeRadio(~,cbdata)
@@ -1744,6 +1826,7 @@ classdef Experiment < handle & matlab.mixin.Copyable
                     expt.yfeature=cbdata.EditData;
                 end
             end
+
 
         end
         
