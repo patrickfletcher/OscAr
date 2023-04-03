@@ -45,7 +45,7 @@ classdef Experiment < handle & matlab.mixin.Copyable
     % observable, then compute features relative to those markers in
     % other traces?
     
-    properties
+    properties 
         name=''
         date=''
         sex=''
@@ -100,33 +100,40 @@ classdef Experiment < handle & matlab.mixin.Copyable
     
     %store parameters used
     properties
-        
-%         tOmit
-%         nOmit
 
 %support variable length parameter lists, eg. for name-value pairs
         normMethod='none'
         normParam=[]
+        normPerSegment=false
         
         trendMethod='none'
         trendParam=[]
-        perSegment=false
+        detrendPerSegment=false
         flattenMethod='none'
+        flattenPerSegment=false
         
         filterMethod='none'
         filterParam=[]
+        filterPerSegment=false
         
         averageMethod='arithmetic'
         averageParam=[]
         
         featureMethod='none'
+        featuresPerSegment=true
         featureParam={}
         featureExtras={}
         
         interpMethod='linear'
         
+        Tab=table;
+        resultsFile='';
+    end
+    
+    properties (SetAccess=protected)
         %interactive plots:
-        fig_handles=matlab.ui.Figure.empty %array of figure handles spawned by this object - use to synchronize trace in focus?
+        fig_handles=matlab.ui.Figure.empty() %array of figure handles spawned by this object - use to synchronize trace in focus?
+%         gobj_array=gobjects()
         tix %in focus
         active_fig %index into fig_handles to maintain its focus upon updates
         featurePlotType='per-period'
@@ -137,6 +144,7 @@ classdef Experiment < handle & matlab.mixin.Copyable
         featureSelectDlg
         paramDlg 
     end
+    
     
     methods
         %constructor
@@ -198,6 +206,13 @@ classdef Experiment < handle & matlab.mixin.Copyable
             
             DT=mode(diff(time)); 
 
+
+            isAllZero=all(Xraw==0,1);
+            if any(isAllZero)
+                expt.notes=[expt.notes,{'removed all zero column(s)'}];
+                Xraw(:,isAllZero)=[];
+            end
+
             %interpolate any missing data using neighboring time points
             %TODO: make this optional?
             
@@ -240,12 +255,15 @@ classdef Experiment < handle & matlab.mixin.Copyable
             %TODO: DT as parameter (for same DT across expts)
             % - alt, make this a method with DT parameter
             
-            ti=0:DT:time(end); ti=ti';
-            XI=zeros(length(ti),size(Xraw,2));
-            for j=1:size(Xraw,2)
-                XI(:,j)=interp1(time,Xraw(:,j),ti,'pchip');
-            end
+%             ti=0:DT:time(end); ti=ti';
+%             XI=zeros(length(ti),size(Xraw,2));
+%             for j=1:size(Xraw,2)
+%                 XI(:,j)=interp1(time,Xraw(:,j),ti,'pchip');
+%             end
             
+            ti=time;
+            XI=Xraw;
+
             expt.t=ti;
             expt.X=XI;
             
@@ -268,15 +286,29 @@ classdef Experiment < handle & matlab.mixin.Copyable
         %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
         % Setup helper functions
         %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-        function defineSegments(expt,names,startTimes)
+        function defineSegments(expt, names, startTimes, stopTimes)
             %expects names as string array, times as vector
             expt.nS=length(names);
             
-            startTimes(end+1)=expt.t(end); %append final time
+            startTimes=startTimes(:);
+                
+            if ~exist('stopTimes','var')||isempty(stopTimes)
+                startTimes(end+1)=expt.t(end); %append final time
+                endpoints = [startTimes(1:expt.nS),startTimes(2:expt.nS+1)];
+            else
+                stopTimes=stopTimes(:);
+                if length(startTimes)==length(stopTimes)+1
+                    stopTimes(end+1,1)=expt.t(end);
+                elseif length(startTimes)~=length(stopTimes)
+                    error(['Start times and Stop times have incorrect length'])
+                end
+                endpoints=[startTimes,stopTimes];
+            end
+            
             for i=1:expt.nS
                 expt.segment(i).name=names(i);
-                expt.segment(i).endpoints=[startTimes(i),startTimes(i+1)];
-                expt.segment(i).ix=expt.t>=startTimes(i) & expt.t<=startTimes(i+1);
+                expt.segment(i).endpoints=endpoints(i,:);
+                expt.segment(i).ix=expt.t>=endpoints(i,1) & expt.t<=endpoints(i,2);
             end
         end
         
@@ -319,21 +351,44 @@ classdef Experiment < handle & matlab.mixin.Copyable
         % Preprocessing functions
         %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
         
-        function setNormalizeParameters(expt,method,methodPar)
+        function setNormalizeParameters(expt,method,methodPar,normPerSegment)
+            arguments
+                expt Experiment
+                method = 'none'
+                methodPar = []
+                normPerSegment = 0
+            end
             expt.normMethod=method;
             expt.normParam=methodPar;
+            expt.normPerSegment=normPerSegment;
         end
         
-        function setDetrendParameters(expt,method,methodPar,doPerSegment,flattenMethod)
+        function setDetrendParameters(expt,method,methodPar,detrendPerSegment,flattenMethod,flattenPerSegment)
+            arguments
+                expt Experiment
+                method = 'none'
+                methodPar = []
+                detrendPerSegment = 0
+                flattenMethod = 'none'
+                flattenPerSegment = 0
+            end
             expt.trendMethod=method;
             expt.trendParam=methodPar;
-            expt.perSegment=doPerSegment;
+            expt.detrendPerSegment=detrendPerSegment;
             expt.flattenMethod=flattenMethod;
+            expt.flattenPerSegment=flattenPerSegment;
         end
         
-        function setFilterParameters(expt,method,methodPar)
+        function setFilterParameters(expt,method,methodPar, filterPerSegment)
+            arguments
+                expt Experiment
+                method = 'none'
+                methodPar = []
+                filterPerSegment = 0
+            end
             expt.filterMethod=method;
             expt.filterParam=methodPar;
+            expt.filterPerSegment=filterPerSegment;
         end
         
         
@@ -347,72 +402,96 @@ classdef Experiment < handle & matlab.mixin.Copyable
         end
         
         
-        function normalize(expt,method,methodPar)
-            if nargin>1
-            expt.normMethod=method;
-            expt.normParam=methodPar;
+        function normalize(expt,method,methodPar,normPerSegment)
+            arguments
+                expt Experiment
+                method = 'none'
+                methodPar = []
+                normPerSegment = 0
             end
-            expt.Xnorm=normalizeTraces(expt.t,expt.X,expt.normMethod,expt.normParam);
+            if nargin>1
+                expt.normMethod=method;
+                expt.normParam=methodPar;
+                expt.normPerSegment=normPerSegment;
+            end
+            if expt.normPerSegment
+                for i=1:expt.nS
+                    thisIx=expt.segment(i).ix;
+                    xnorm=normalizeTraces(expt.t(thisIx),expt.X(thisIx,:),expt.normMethod,expt.normParam);
+                    expt.Xnorm(thisIx,:)=xnorm;
+                end
+                segix=any([expt.segment(:).ix],2);
+                expt.Xnorm(~segix,:)=nan;
+                
+            else
+                expt.Xnorm=normalizeTraces(expt.t,expt.X,expt.normMethod,expt.normParam);
+            end
+            
         end
         
         
         %detrend supports per-segment: for piecewise linear detrend.
-        function detrend(expt,method,methodPar,perSegment,flattenMethod)
-            
+        function detrend(expt,method,methodPar,detrendPerSegment,flattenMethod,flattenPerSegment)
+            arguments
+                expt Experiment
+                method = 'none'
+                methodPar = []
+                detrendPerSegment = 0
+                flattenMethod = 'none'
+                flattenPerSegment = 0
+            end
             if nargin>1
                 expt.trendMethod=method;
                 expt.trendParam=methodPar;
-                expt.perSegment=perSegment;
+                expt.detrendPerSegment=detrendPerSegment;
                 expt.flattenMethod=flattenMethod;
+                expt.flattenPerSegment=flattenPerSegment;
             end
             
             if isempty(expt.Xnorm)
                 expt.normalize();
             end
             
-            if expt.perSegment
+            [Xdt_full,Xt_full]=detrendTraces(expt.t,expt.Xnorm,expt.trendMethod,expt.trendParam);
+            full_offset = getFlattenOffset(expt.Xnorm, Xt_full, expt.flattenMethod);
+            if expt.detrendPerSegment
+                last=0;
                 for i=1:expt.nS
                     thisIx=expt.segment(i).ix;
                     [Xdt,Xt]=detrendTraces(expt.t(thisIx),expt.Xnorm(thisIx,:),expt.trendMethod,expt.trendParam);
+                    Xt_full(thisIx,:)=Xt;
                     
-                    if ~(expt.flattenMethod=="none")
-                        %apply flattening.
+                    % flatten logic: all branches set seg_offset.
+                    if expt.flattenPerSegment
+                        % Trace will be discontinuous
+                        seg_offset = getFlattenOffset(expt.Xnorm(thisIx,:), Xt, expt.flattenMethod);
+                        
+                    else
+                        %use full trace to get flatten value: only
+                        %norm-based flatten supported. Trace will be continuous
                         if i==1
-                            last=Xdt(1,:);
+                            seg_offset=full_offset-Xdt(1,:);
+                        else
+                            seg_offset=last-Xdt(1,:);
                         end
-%                         if i==1 
-                            switch expt.flattenMethod
-                                case 'mean'
-                                    addVal=mean(expt.Xnorm(thisIx,:),1);
-                                case 'median'
-                                    addVal=median(expt.Xnorm(thisIx,:),1);
-                                case 'first'
-                                    addVal=expt.Xnorm(find(thisIx,1,'first'),:);
-                                case 'meanTrend'
-                                    addVal=mean(Xt,1);
-                                case 'medianTrend'
-                                    addVal=median(Xt,1);
-                                case 'firstTrend'
-                                    addVal=Xt(1,:);
-                                case 'continuous'
-                                    addVal=last-Xdt(1,:); %makes the trace continuous
-                                otherwise
-                                    error(['Unknown flatten method: ', expt.flattenMethod])
-                            end
-%                         else
-%                             addVal=last-Xdt(1,:); %makes the trace continuous
-%                         end
-                        Xdt=Xdt+addVal;
-                        last=Xdt(end,:);
                     end
+                    Xdt = Xdt + seg_offset;
                     
-                    expt.Xtrend(thisIx,:)=Xt;
-                    expt.Xdetrend(thisIx,:)=Xdt;
+                    last=Xdt(end,:);
+                    Xdt_full(thisIx,:)=Xdt;
                 end
                 
+                segix=any([expt.segment(:).ix],2);
+                Xt_full(~segix,:)=nan;
+                Xdt_full(~segix,:)=nan;
             else
-                [expt.Xdetrend,expt.Xtrend]=detrendTraces(expt.t,expt.Xnorm,expt.trendMethod,expt.trendParam);
+                % flatten as one segment (expt.flattenPerSegment=1 has no effect) 
+                % Trace will be continuous
+                Xdt_full = Xdt_full + full_offset;
             end
+            expt.Xtrend=Xt_full;
+            expt.Xdetrend=Xdt_full;
+            
             
         end
         
@@ -430,13 +509,22 @@ classdef Experiment < handle & matlab.mixin.Copyable
             
             expt.Xdetrend=XDTg; %groupmode overwrites detrend... TODO: keep both for plotting
 
+%             segix=any([expt.segment(:).ix],2);
+%             expt.Xdetrend(~segix,:)=nan;
         end
         
         
-        function filter(expt,method,methodPar)
+        function filter(expt, method, methodPar, filterPerSegment)
+            arguments
+                expt Experiment
+                method = 'none'
+                methodPar = []
+                filterPerSegment = 0
+            end
             if nargin>1
                 expt.filterMethod=method;
                 expt.filterParam=methodPar;
+                expt.filterPerSegment=filterPerSegment;
             end
             
             if isempty(expt.Xnorm)
@@ -445,7 +533,19 @@ classdef Experiment < handle & matlab.mixin.Copyable
             if isempty(expt.Xdetrend)
                 expt.detrend();
             end
-            expt.Xfilt=filterTraces(expt.t,expt.Xdetrend,expt.filterMethod,expt.filterParam);
+            
+            if expt.filterPerSegment
+                for i=1:expt.nS
+                    thisIx=expt.segment(i).ix;
+                    xfilt=filterTraces(expt.t(thisIx),expt.Xdetrend(thisIx,:),expt.filterMethod,expt.filterParam);
+                    expt.Xfilt(thisIx,:)=xfilt;
+                end
+                segix=any([expt.segment(:).ix],2);
+                expt.Xfilt(~segix,:)=nan;
+            else
+                expt.Xfilt=filterTraces(expt.t,expt.Xdetrend,expt.filterMethod,expt.filterParam);
+            end
+            
         end
         
         
@@ -461,15 +561,17 @@ classdef Experiment < handle & matlab.mixin.Copyable
             expt.featureExtras=varargin;
         end
         
-        function compute_features(expt,method,methodpar,varargin)
+        function compute_features(expt,method,methodpar,featuresPerSegment,varargin)
             if nargin>1
             expt.featureMethod=method;
             expt.featureParam=methodpar;
+            expt.featuresPerSegment=featuresPerSegment;
             expt.featureExtras=varargin;
             end
             if ~strcmp(expt.featureMethod,'none')
             expt.detect_periods();
             expt.periodogram();
+            expt.computeSegmentStats();
             expt.fnames_periods=fieldnames(expt.segment(1).features_periods)';
             expt.fnames_trace=fieldnames(expt.segment(1).features_trace)';
             expt.buildResultsTable();
@@ -507,21 +609,56 @@ classdef Experiment < handle & matlab.mixin.Copyable
                 figID=gcf;
                 figID.Name=strcat('Traces: ',expt.name);
                 figID.NumberTitle='off';
-                if ~ismember(figID,expt.fig_handles)
-                    expt.fig_handles(end+1)=figID; %register the new fig with expt
-                end
                 figID.KeyPressFcn=@expt.commonKeypress;
 %                 figID.Interruptible='off';
                 figID.UserData={'trace',whichPlot,showPts};
                 figID.CloseRequestFcn=@expt.figureCloseFcn;
+                if ~ismember(figID,expt.fig_handles)
+                    expt.fig_handles(end+1)=figID; %register the new fig with expt
+                end
             end
             
-            nPlots=length(whichPlot);
-            for i=1:nPlots
-                subplot(nPlots,1,i)
-                expt.plot_t(whichPlot{i},showPts)
-            end
             expt.active_fig=gcf;
+            nPlots=length(whichPlot);
+%             tiledlayout(expt.active_fig, nPlots,1,'TileSpacing','compact','Padding','compact');
+            
+            %set up the objects
+            for j=1:nPlots
+%                 ax(j)=nexttile(j);
+                ax(j)=subplot(nPlots,1,j);
+%                 uistack(ax(j),'bottom')
+                ax(j).XTick=[];
+%                 ax(j).YLabel.String=whichPlot;
+                
+                for i=1:expt.nX
+                    line(ax(j),nan,nan,'color',0.85*[1,1,1],'tag','xall_line');
+                end
+                line(ax(j),nan,nan,'color',0.1*[1,1,1],'tag','x_line');
+                line(ax(j),nan,nan,'color',[0.3,0.7,1],'tag','x2_line')
+            
+                for i=1:expt.nS
+                    line(ax(j),nan,nan,'color','r','marker','^','linestyle','none','tag','min_line')
+                    line(ax(j),nan,nan,'color','r','marker','v','linestyle','none','tag','max_line')
+                    line(ax(j),nan,nan,'color','g','marker','<','linestyle','none','tag','dxmin_line')
+                    line(ax(j),nan,nan,'color','g','marker','>','linestyle','none','tag','dxmax_line')
+                    line(ax(j),nan,nan,'color','b','marker','d','linestyle','none','tag','up_line')
+                    line(ax(j),nan,nan,'color','b','marker','o','linestyle','none','tag','down_line')
+                    line(ax(j),nan,nan,'color','b','marker','s','linestyle','none','tag','period_line')
+                end
+                for i=1:expt.nS-1
+                    line(ax(j),nan,nan,'color',[0,0.75,0],'tag','seg_start_line')
+                    line(ax(j),nan,nan,'color',[0.75,0,0],'tag','seg_stop_line')
+                end
+            end
+            ax(end).XTickMode='auto';
+            ax(end).XLabel.String='t';
+            linkaxes(ax,'x')
+            
+%             expt.active_fig.Children=expt.active_fig.Children(nPlots:-1:1);
+            
+            expt.updatePlots('trace')
+            
+%             uistack(
         end
         
         function plotPeriodogram(expt,tix,doInteractive)
@@ -580,17 +717,17 @@ classdef Experiment < handle & matlab.mixin.Copyable
             end
             if xname=="segment"
                 if ismember(yname,expt.fnames_periods)
-                    expt.featurePlotType='per-period';
+                    featPlotType='per-period';
                 else
-                    expt.featurePlotType='per-trace';
+                    featPlotType='per-trace';
                 end
             else
                 xp=ismember(xname,['t',expt.fnames_periods]); %valid for period, otherwise trace
                 yp=ismember(yname,expt.fnames_periods);
                 if xp&&yp
-                    expt.featurePlotType='per-period';
+                    featPlotType='per-period';
                 elseif ~xp&&~yp
-                    expt.featurePlotType='per-trace';
+                    featPlotType='per-trace';
                 else
                     error('Incompatible feature types: mixed trace/period')
                 end
@@ -598,6 +735,7 @@ classdef Experiment < handle & matlab.mixin.Copyable
             
             expt.xfeature=xname;
             expt.yfeature=yname;
+            expt.featurePlotType=featPlotType;
             
             %interactive figure: set up callbacks
             if doInteractive
@@ -606,14 +744,14 @@ classdef Experiment < handle & matlab.mixin.Copyable
                 figID.NumberTitle='off';
                 figID.KeyPressFcn=@expt.commonKeypress;
 %                 figID.Interruptible='off';
-                figID.UserData={'feature'};
+                figID.UserData={'feature',xname,yname,featPlotType};
                 figID.CloseRequestFcn=@expt.figureCloseFcn;
                 if ~ismember(figID,expt.fig_handles)
                     expt.fig_handles(end+1)=figID; %register the new fig with expt
                 end
             end
             
-            switch expt.featurePlotType
+            switch featPlotType
                 case 'per-period'
                     expt.plot_features_periods();
                 case 'per-trace'
@@ -626,7 +764,12 @@ classdef Experiment < handle & matlab.mixin.Copyable
         % saving/displaying results
         %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
         
-        function displayResults(expt)
+        function displayResults(expt,createNewFig)
+            arguments
+                expt Experiment
+                createNewFig=true 
+            end
+            
             %simple table view of results to cross reference with traces
             %examined by keypress
             %
@@ -634,21 +777,34 @@ classdef Experiment < handle & matlab.mixin.Copyable
             %  TODO: include=true/false column, select traces for result
             %  export?
             
+            
             if isempty(expt.resultsTrace)
 %                 warning('results table is empty, nothing to do')
                 return
             end
-            
-            if isempty(expt.resfig)
-                expt.resfig=gcf; %uses current figure, or creates one if no figs
-                expt.resfig.Name=strcat('Result Table: ',expt.filename);
-                expt.resfig.NumberTitle='off';
-                expt.resfig.KeyPressFcn=@expt.commonKeypress;
-    %             expt.resfig.Interruptible='off';
-                expt.resfig.CloseRequestFcn=@expt.resfigCloseFcn;
-            else
-                figure(expt.resfig)
+
+            figID=[];
+            if ~createNewFig %check if fig exists
+                for i=1:length(expt.fig_handles)
+                    if expt.fig_handles(i).UserData{1}=="results"
+                        figID=expt.fig_handles(i);
+                        break
+                    end
+                end
             end
+            if isempty(figID)
+                figID=gcf; %uses current figure, or creates one if no figs
+                figID.Name=strcat('Result Table: ',expt.filename);
+                figID.NumberTitle='off';
+                figID.KeyPressFcn=@expt.commonKeypress;
+                figID.UserData={'results'};
+    %             figID.Interruptible='off';
+                figID.CloseRequestFcn=@expt.figureCloseFcn;
+                if ~ismember(figID,expt.fig_handles)
+                    expt.fig_handles(end+1)=figID; %register the new fig with expt
+                end
+            end
+            figure(figID);
             
             colnames=[{'Trace'};{'Group'};{'Segment'};{'Include'};fieldnames(expt.segment(1).features_trace)];
 %             colnames=[{'Trace'};{'Segment'};{'Include'};fieldnames(expt.segment(1).features_trace)];
@@ -658,7 +814,7 @@ classdef Experiment < handle & matlab.mixin.Copyable
 %             coledit(3)=true; 
             %needs a callback function to link edited values to expt.include
             
-            uit=uitable(expt.resfig,'Data',expt.resultsTrace{:,:},'tag','oscar_resultsTable');
+            uit=uitable(figID,'Data',expt.resultsTrace{:,:},'tag','oscar_resultsTable');
             uit.ColumnName=colnames;
 %             uit.ColumnFormat=colformat;
 %             uit.ColumnEditable=coledit;
@@ -666,13 +822,101 @@ classdef Experiment < handle & matlab.mixin.Copyable
             uit.Units='normalized';
             uit.Position=[0.025,0.025,0.95,0.95];
             
-            figure(expt.resfig) %bring focus back to figure (for keypressfcn)
+            figure(figID) %bring focus back to figure (for keypressfcn)
             figure(expt.active_fig) %bring focus back to active figure
         end
         
 %         function displayResultsKeypress
 %         end
+
+        function destinationExperiment=copyProcessedData(expt, destinationExperiment)
+            
+            destinationExperiment.normMethod=expt.normMethod;
+            destinationExperiment.normParam=expt.normParam;
+            destinationExperiment.normPerSegment=expt.normPerSegment;
+            destinationExperiment.trendMethod=expt.trendMethod;
+            destinationExperiment.trendParam=expt.trendParam;
+            destinationExperiment.detrendPerSegment=expt.detrendPerSegment;
+            destinationExperiment.flattenMethod=expt.flattenMethod;
+            destinationExperiment.flattenPerSegment=expt.flattenPerSegment;
+            destinationExperiment.filterMethod=expt.filterMethod;
+            destinationExperiment.filterParam=expt.filterParam;
+            destinationExperiment.filterPerSegment=expt.filterPerSegment;
+            destinationExperiment.featureMethod=expt.featureMethod;
+            destinationExperiment.featureParam=expt.featureParam;
+            destinationExperiment.featureExtras=expt.featureExtras;
+            
+            destinationExperiment.averageMethod=expt.averageMethod;
+            destinationExperiment.averageParam=expt.averageParam;
+            
+            destinationExperiment.Xnorm=expt.Xnorm;
+            destinationExperiment.Xtrend=expt.Xtrend;
+            destinationExperiment.Xdetrend=expt.Xdetrend;
+            destinationExperiment.Xfilt=expt.Xfilt;
+            destinationExperiment.psd=expt.psd;
+            destinationExperiment.psdFilt=expt.psdFilt;
+            destinationExperiment.segment=expt.segment;
+            destinationExperiment.fnames_periods=expt.fnames_periods;
+            destinationExperiment.fnames_trace=expt.fnames_trace;
+            destinationExperiment.resultsPeriod=expt.resultsPeriod;
+            destinationExperiment.resultsTrace=expt.resultsTrace;
+            
+            destinationExperiment.include=expt.include;
+            destinationExperiment.includeT=expt.includeT;
+            destinationExperiment.includeG=expt.includeG;
+            destinationExperiment.group=expt.group;
+            destinationExperiment.groupMode=expt.groupMode;
+        end
+
+        function setSaveArgs(expt, Tab, resultsFile)
+            expt.Tab=Tab;
+            expt.resultsFile=resultsFile;
+        end
         
+        function saveResults(expt)
+            normPar=expt.normParam; if isempty(normPar), normPar="none"; end
+            trendPar=expt.trendParam; if isempty(trendPar), trendPar="none"; end
+            filterPar=expt.filterParam; if isempty(filterPar), filterPar="none"; end
+            
+            thisInfo=expt.Tab;
+            thisInfo.normMethod=repmat(string(expt.normMethod),expt.nS*expt.nX,1);
+            thisInfo.normParam=repmat(normPar,expt.nS*expt.nX,1);
+            thisInfo.normPerSegment=repmat(expt.normPerSegment,expt.nS*expt.nX,1);
+            thisInfo.trendMethod=repmat(string(expt.trendMethod),expt.nS*expt.nX,1);
+            thisInfo.trendParam=repmat(trendPar,expt.nS*expt.nX,1);
+            thisInfo.detrendPerSegment=repmat(expt.detrendPerSegment,expt.nS*expt.nX,1);
+            thisInfo.filterMethod=repmat(string(expt.filterMethod),expt.nS*expt.nX,1);
+            thisInfo.filterParam=repmat(filterPar,expt.nS*expt.nX,1);
+            thisInfo.filterPerSegment=repmat(expt.filterPerSegment,expt.nS*expt.nX,1);
+            thisInfo.featureMethod=repmat(string(expt.featureMethod),expt.nS*expt.nX,1);
+            thisInfo.featureParam=repmat(expt.featureParam,expt.nS*expt.nX,1);
+            thisInfo.minAmp=repmat(expt.featureExtras{1}.MinimumAmplitude,expt.nS*expt.nX,1);
+
+            thisResult=expt.resultsTrace(:,3:end);
+
+            segNames=[expt.segment(:).name]';
+            thisSegNames=segNames(thisResult.Segment);
+            thisInfo.SegmentName=thisSegNames;
+
+            thisInfo=[thisInfo,thisResult];
+
+            if ~exist(expt.resultsFile,'file')
+                resultsTab=thisInfo; %first time, make a new table
+            else
+                resultsTab=load(expt.resultsFile);  %need a way to give this var a name???
+                FN=fieldnames(resultsTab);
+                resultsTab=resultsTab.(FN{1});
+                rows=ismember(resultsTab(:,1:2),thisInfo(:,1:2),'rows');
+                if any(rows) 
+                    resultsTab(rows,:)=thisInfo; %replace existing rows
+                else
+                    resultsTab=[resultsTab;thisInfo]; %append new rows
+                end
+            end
+            save(expt.resultsFile,'resultsTab')
+            disp("Saved expt.resultsTrace to " + expt.resultsFile)
+        end
+
         
         function writeToExcel(expt,outfilename,doDistributions)
             %write a header region with file/experiment info
@@ -755,44 +999,93 @@ classdef Experiment < handle & matlab.mixin.Copyable
 %             expt.featureExtras=varargin{:};
             
             %TODO: per-segment toggle
-
             extras=expt.featureExtras;
-            for i=1:expt.nS
-                thisIx=expt.segment(i).ix;
-                tt=expt.t(thisIx);
-                xx=expt.Xfilt(thisIx,:);
+            if expt.featuresPerSegment
+                for i=1:expt.nS
+                    thisIx=expt.segment(i).ix;
+                    tt=expt.t(thisIx);
+                    xx=expt.Xfilt(thisIx,:);
+                    switch expt.featureMethod
+                        case {'peaks'}
+                            delta=expt.featureParam;
+    %                         if length(varargin)>1, extras=varargin(2:end); end
+                            [F, Fdist, points, fcns]=peak_detector(tt,xx,delta,extras{:});
+    
+                        case {'threshold'}
+                            frac=expt.featureParam;
+    %                         if length(varargin)>1, extras=varargin(2:end); end
+                            [F, Fdist, points, fcns]=plateau_detector(tt,xx,frac,extras{:});
+                    end
+                    
+                    expt.segment(i).points=points;
+                    expt.segment(i).features_periods=Fdist;
+                    expt.segment(i).features_trace=F;
+                end
+            else
                 switch expt.featureMethod
                     case {'peaks'}
                         delta=expt.featureParam;
-%                         if length(varargin)>1, extras=varargin(2:end); end
-                        [F, Fdist, points, fcns]=peak_detector(tt,xx,delta,extras{:});
+                        [F, Fdist, points, fcns]=peak_detector(expt.t,expt.Xfilt,delta,extras{:});
 
                     case {'threshold'}
                         frac=expt.featureParam;
-%                         if length(varargin)>1, extras=varargin(2:end); end
-                        [F, Fdist, points, fcns]=plateau_detector(tt,xx,frac,extras{:});
+                        [F, Fdist, points, fcns]=plateau_detector(expt.t,expt.Xfilt,frac,extras{:});
                 end
-                
-                expt.segment(i).points=points;
-                expt.segment(i).features_periods=Fdist;
-                expt.segment(i).features_trace=F;
+
+                fun=@(x) ([x.period(:).t(1:end-1)]+[x.period(:).t(2:end)])/2;
+                xall=arrayfun(fun, points, 'UniformOutput', false);
+
+                for i=1:expt.nS
+                    ep=expt.segment(i).endpoints;
+                    inseg=cellfun(@(x)x>ep(1)&x<ep(2),xall, 'UniformOutput', false);
+                    expt.segment(i).points=points;
+                    expt.segment(i).features_periods=Fdist;
+                    expt.segment(i).features_trace=F;
+%                     for j=1:expt.nX
+%                         expt.segment(i).points(j)=points(inseg{j});
+%                     end
+
+                end
+
+%                 xall=[xall{:}];
             end
+
             expt.featureFcn=fcns.compute_features;
         end
         
         function periodogram(expt)
+            
+            nsamp=2048;
+            peakdelta=0.05;
+            
+            expt.psd=zeros([nsamp/2,expt.N,expt.nS]);
+            expt.psdFilt=zeros([nsamp/2,expt.N,expt.nS]);
+            
             for i=1:expt.nS
                 thisIx=expt.segment(i).ix;
                 DT=expt.Xdetrend(thisIx,:);
                 DT=DT-mean(DT,1);
-                [PSD,F,Pmax,fmax]=powerSpectrum(DT,expt.fs);
-                Tpsd=1./fmax;
+                [PSD1,F,Pmax1,fmax1]=powerSpectrumOscar(DT, expt.fs, nsamp);
+                Tpsd1=1./fmax1;
+                expt.psd(:,:,i)=PSD1;
                 
-                expt.psd=zeros([size(PSD),expt.nS]);
-                expt.psd(:,:,i)=PSD;
+                DTF=expt.Xfilt(thisIx,:);
+                DTF=DTF-mean(DTF,1);
+                [PSD2,~,Pmax2,fmax2]=powerSpectrumOscar(DTF,expt.fs, nsamp);
+                Tpsd2=1./fmax2;
+                expt.psdFilt(:,:,i)=PSD2;
+                
+                PSD=PSD1;
+                Pmax=Pmax1;
+                fmax=fmax1;
+                Tpsd=Tpsd1;
+%                 PSD=PSD2;
+%                 Pmax=Pmax2;
+%                 fmax=fmax2;
+%                 Tpsd=Tpsd2;
                 
                 PSD(1,:)=Pmax;
-                [~,~,points]=peak_detector(F,PSD,0.05);
+                [~,~,points]=peak_detector(F, PSD, peakdelta);
                 m2=zeros(1,length(points));
                 for j=1:length(points)
                     othermax=points(j).max.x~=Pmax(j);
@@ -800,7 +1093,7 @@ classdef Experiment < handle & matlab.mixin.Copyable
                         m2(j)=max(points(j).max.x(othermax));
                     end
                 end
-                Rp21=m2./Pmax;
+                Rp21=m2./Pmax; %second peak power to first peak power ratio
                 
                 Tpsd=num2cell(Tpsd);
                 fmax=num2cell(fmax);
@@ -812,15 +1105,45 @@ classdef Experiment < handle & matlab.mixin.Copyable
                 [expt.segment(i).features_trace.Pmax]=Pmax{:};
                 [expt.segment(i).features_trace.Rp21]=Rp21{:};
                 
-                DTF=expt.Xdetrend(thisIx,:);
-                DTF=DTF-mean(DTF,1);
-                [PSD,F,Pmax,fmax]=powerSpectrum(DTF,expt.fs);
-                expt.psdFilt=zeros([size(PSD),expt.nS]);
-                expt.psdFilt(:,:,i)=PSD;
             end
             expt.f=F; %frquency vector
         end
         
+        function computeSegmentStats(expt)
+            %mean, quartiles, AUC
+            for i=1:expt.nS
+                thisseg=expt.segment(i).ix;
+                tt=expt.t(thisseg);
+                XX=expt.Xdetrend(thisseg,expt.includeT);
+
+                M=mean(XX,1);
+                S=std(XX,0,1);
+                PTILE=prctile(XX,[0,25,50,75,100],1);
+
+                AUC=trapz(tt,XX,1);
+                %normalize to duration of the segment
+                % - isn't this just the mean????
+                AUC=AUC/diff(expt.segment(i).endpoints);
+
+                M=num2cell(M);
+                S=num2cell(S);
+                PTILE0=num2cell(PTILE(1,:));
+                PTILE25=num2cell(PTILE(2,:));
+                PTILE50=num2cell(PTILE(3,:));
+                PTILE75=num2cell(PTILE(4,:));
+                PTILE100=num2cell(PTILE(5,:));
+                AUC=num2cell(AUC);
+                [expt.segment(i).features_trace.mean]=M{:};
+                [expt.segment(i).features_trace.stdev]=S{:};
+                [expt.segment(i).features_trace.min]=PTILE0{:};
+                [expt.segment(i).features_trace.q1]=PTILE25{:};
+                [expt.segment(i).features_trace.median]=PTILE50{:};
+                [expt.segment(i).features_trace.q3]=PTILE75{:};
+                [expt.segment(i).features_trace.max]=PTILE100{:};
+                [expt.segment(i).features_trace.AUC]=AUC{:};
+            end
+        end
+
         
         %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
         % Plotting functions
@@ -829,54 +1152,90 @@ classdef Experiment < handle & matlab.mixin.Copyable
         function plot_t(expt,whichPlot,showPts)
             
             ax=gca;
-            reset(ax)
-            delete(findobj(ax,'tag','oscar_line'));
-            
+%             reset(ax)
+%             axes(ax)
+%             delete(findobj(ax,'tag','oscar_line'));
+                
             points_option='period';
-            x=[];x2=[];
+            x2=[];
             thisG=expt.group(expt.tix);
             ix2plot=expt.group==thisG;
             gixlist=find(ix2plot);
             gix=find(gixlist==expt.tix);
+            
+            segix=any([expt.segment(:).ix],2);
+            segstart=arrayfun(@(x) find(x.ix,1,'first'),expt.segment);
+            segstart(1)=[];
+            tt=expt.t;
             switch whichPlot
                 case {'r','raw'}
-                    if ~expt.groupMode
-                        x=expt.X(:,ix2plot);
-                    end
+%                     if ~expt.groupMode
+                    xall=expt.X(:,ix2plot);
+                    x=expt.X(:,expt.tix);
+%                     end
                     
                 case {'n','norm','normalize','normalized'}
-                    if ~expt.groupMode
-                        x=expt.Xnorm(:,ix2plot);
-                        if ~isempty(expt.Xtrend), x2=expt.Xtrend(:,expt.tix); end
+                    xall=expt.Xnorm(:,ix2plot);
+                    x=expt.Xnorm(:,expt.tix);
+                    if expt.trendMethod~="none"
+                        x2=expt.Xtrend(:,expt.tix);
                     end
-
-                case {'t','trend','trendline'}
-                    x=expt.Xtrend(:,ix2plot);
+%                     if ~expt.groupMode
+%                     x=expt.Xnorm(:,ix2plot);
+%                     x2=expt.Xtrend(:,expt.tix);
+%                     end
                     
                 case {'d','detrend','detrended'}
-                    x=expt.Xdetrend(:,ix2plot);
-                    if ~isempty(expt.Xfilt), x2=expt.Xfilt(:,expt.tix); end
-%                     line([min(expt.t),max(expt.t)],[0,0],'color','k','linestyle','--','tag','oscar_line')
+                    xall=expt.Xdetrend(:,ix2plot);
+                    x=expt.Xdetrend(:,expt.tix);
+                    if expt.filterMethod~="none"
+                        x2=expt.Xfilt(:,expt.tix);
+                    end
                     
                 case {'f','filt','filter','filtered'}
-                    x=expt.Xfilt(:,ix2plot);
-%                     line([min(expt.t),max(expt.t)],[0,0],'color','k','linestyle','--','tag','oscar_line')
+                    xall=expt.Xfilt(:,ix2plot);
+                    x=expt.Xfilt(:,expt.tix);
                     points_option='all';
                     
                 otherwise
                     error([whichPlot, ' is not a supported trace type for plotting']);
             end
-            
-            
-            if ~isempty(x)
-                hl=line(expt.t,x,zeros(size(expt.t)),'color',[0.75,0.75,0.75],'tag','oscar_line');
 
-                if ~isempty(x2)
-                    line(expt.t,x2,'tag','oscar_line')
+%                 hxall=line(tt,xall,zeros(size(tt)),'color',0.85*[1,1,1],'tag','xall_line');
+%                 hx=line(tt(segix),x(segix),ones(size(tt(segix))),'color',0.1*[1,1,1],'tag','x_line');
+%                 hx2=line(tt(segix),x2(segix),2*ones(size(tt(segix))),'color',[0.3,0.7,1],'tag','x2_line')
+%                 line(pts.min.t,pts.min.x,'color','r','marker','^','linestyle','none','tag','min_line')
+%                 line(pts.max.t,pts.max.x,'color','r','marker','v','linestyle','none','tag','max_line')
+%                 line(pts.dxmin.t,pts.dxmin.x,'color','g','marker','<','linestyle','none','tag','dxmin_line')
+%                 line(pts.dxmax.t,pts.dxmax.x,'color','g','marker','>','linestyle','none','tag','dxmax_line')
+%                 line(pts.up.t,pts.up.x,'color','b','marker','d','linestyle','none','tag','up_line')
+%                 line(pts.down.t,pts.down.x,'color','b','marker','o','linestyle','none','tag','down_line')
+%                 line(pts.period.t,xPer,'color','b','marker','s','linestyle','none','tag','period_line')
+
+            if ~isempty(x)
+                
+                xall(segstart,:)=nan;
+                x(segstart)=nan;
+                
+                hxall=findobj(ax.Children,'tag','xall_line');
+                for i=1:size(xall,2)
+                    set(hxall(i),'XData',tt,'YData',xall(:,i))
                 end
                 
-                hl(gix).Color='k';
-                hl(gix).ZData=2*ones(size(hl(gix).ZData));
+                hx=findobj(ax.Children,'tag','x_line');
+                set(hx,'XData',tt(segix),'YData',x(segix))
+                
+%                 hxall=line(tt,xall,zeros(size(tt)),'color',0.85*[1,1,1],'tag','xall_line');
+%                 hx=line(tt(segix),x(segix),ones(size(tt(segix))),'color',0.1*[1,1,1],'tag','x_line');
+
+                if ~isempty(x2) %&& ~all(x2==0)
+                    x2(segstart)=nan;
+                    hx2=findobj(ax.Children,'tag','x2_line');
+                    set(hx2,'XData',tt(segix),'YData',x2(segix))
+                    
+%                     hx2=line(tt(segix),x2(segix),2*ones(size(tt(segix))),'color',[0.3,0.7,1],'tag','x2_line')
+                end
+                
                     
                 %slower, but benefit of encapsulating special point plots in
                 %detector code
@@ -893,71 +1252,106 @@ classdef Experiment < handle & matlab.mixin.Copyable
                 if showPts
                     for i=1:expt.nS
                         tt=expt.t(expt.segment(i).ix);
-                        xx=x(expt.segment(i).ix,gix);
-                        pts=expt.segment(i).points(expt.tix);
-
-                        if length(pts.period.t)>1
-
-                        if points_option=="all"
-                            line(pts.min.t,pts.min.x,'color','r','marker','^','linestyle','none','tag','oscar_line')
-                            line(pts.max.t,pts.max.x,'color','r','marker','v','linestyle','none','tag','oscar_line')
-                            line(pts.dxmin.t,pts.dxmin.x,'color','g','marker','<','linestyle','none','tag','oscar_line')
-                            line(pts.dxmax.t,pts.dxmax.x,'color','g','marker','>','linestyle','none','tag','oscar_line')
-                            line(pts.up.t,pts.up.x,'color','b','marker','d','linestyle','none','tag','oscar_line')
-                            line(pts.down.t,pts.down.x,'color','b','marker','o','linestyle','none','tag','oscar_line')
-
-    %                         tupdwn=[pts.up.t(1:length(pts.down.t)); pts.down.t];
-    %                         ythresh=[1;1]*expt.segment(i).features(expt.tix).pthresh;
-    %                         plot(ax,tupdwn,ythresh,'b-')
-                        else
-
-                            xPer=interp1(tt,xx,pts.period.t); %this is necessary except for filt
-                            line(pts.period.t,xPer,'color','b','marker','s','linestyle','none','tag','oscar_line')
-
-                        end
-
+                        xx=x(expt.segment(i).ix);
+                        if isfield(expt.segment(i), 'points') && isfield(expt.segment(i).points, 'period')
+                            
+                            pts=expt.segment(i).points(expt.tix);
+                            hmin=findobj(ax.Children,'tag','min_line');
+                            hmax=findobj(ax.Children,'tag','max_line');
+                            hdxmin=findobj(ax.Children,'tag','dxmin_line');
+                            hdxmax=findobj(ax.Children,'tag','dxmax_line');
+                            hup=findobj(ax.Children,'tag','up_line');
+                            hdown=findobj(ax.Children,'tag','down_line');
+                            hperiod=findobj(ax.Children,'tag','period_line');
+                            if length(pts.period.t)>1
+                                if points_option=="all"
+                                    set(hmin(i),'XData',pts.min.t,'YData',pts.min.x)
+                                    set(hmax(i),'XData',pts.max.t,'YData',pts.max.x)
+                                    set(hdxmin(i),'XData',pts.dxmin.t,'YData',pts.dxmin.x)
+                                    set(hdxmax(i),'XData',pts.dxmax.t,'YData',pts.dxmax.x)
+                                    set(hup(i),'XData',pts.up.t,'YData',pts.up.x)
+                                    set(hdown(i),'XData',pts.down.t,'YData',pts.down.x)
+                                    
+%                                     line(pts.min.t,pts.min.x,'color','r','marker','^','linestyle','none','tag','min_line')
+%                                     line(pts.max.t,pts.max.x,'color','r','marker','v','linestyle','none','tag','max_line')
+%                                     line(pts.dxmin.t,pts.dxmin.x,'color','g','marker','<','linestyle','none','tag','dxmin_line')
+%                                     line(pts.dxmax.t,pts.dxmax.x,'color','g','marker','>','linestyle','none','tag','dxmax_line')
+%                                     line(pts.up.t,pts.up.x,'color','b','marker','d','linestyle','none','tag','up_line')
+%                                     line(pts.down.t,pts.down.x,'color','b','marker','o','linestyle','none','tag','down_line')
+                                    
+            %                         tupdwn=[pts.up.t(1:length(pts.down.t)); pts.down.t];
+            %                         ythresh=[1;1]*expt.segment(i).features(expt.tix).pthresh;
+            %                         plot(ax,tupdwn,ythresh,'b-')
+                                else
+                                    xPer=interp1(tt,xx,pts.period.t); %this is necessary except for filt
+                                    set(hperiod(i),'XData',pts.period.t,'YData',xPer)
+                                    
+%                                     line(pts.period.t,xPer,'color','b','marker','s','linestyle','none','tag','period_line')
+                                    
+                                end
+                            else
+                                set(hmin(i),'XData',nan,'YData',nan)
+                                set(hmax(i),'XData',nan,'YData',nan)
+                                set(hdxmin(i),'XData',nan,'YData',nan)
+                                set(hdxmax(i),'XData',nan,'YData',nan)
+                                set(hup(i),'XData',nan,'YData',nan)
+                                set(hdown(i),'XData',nan,'YData',nan)
+                                set(hperiod(i),'XData',nan,'YData',nan)
+                            end
                         end
                     end
                 end
-
-    %             axis tight
-                xlabel('t')
-                ylabel(['X_{',whichPlot,'}',num2str(expt.tix)])
-    %             YLIM=ylim();
-    %             ylim([YLIM(1)-0.05*abs(YLIM(1)),YLIM(2)+0.05*abs(YLIM(2))]);
-
-                for i=2:expt.nS
-                    line(expt.segment(i).endpoints(1)*[1,1],ylim(),'color','g','tag','oscar_line')
+%                 
+                ax.XLim=[min(expt.t),max(expt.t)];
+                ax.YLabel.String="X_{"+whichPlot+"}"+num2str(expt.tix);
+                
+                endpoints=[expt.segment(:).endpoints];
+                starts=endpoints(1:2:end);
+                stops=endpoints(2:2:end);
+                hseg_start=findobj(ax.Children,'tag','seg_start_line');
+                hseg_stop=findobj(ax.Children,'tag','seg_stop_line');
+                for i=1:expt.nS-1
+%                     set(hseg_start(i),'YData',ylim(ax))
+%                     set(hseg_stop(i),'YData',ylim(ax))
+                    set(hseg_start(i),'XData',[1,1]*starts(i+1),'YData',ylim(ax))
+                    set(hseg_stop(i),'XData',[1,1]*stops(i),'YData',ylim(ax))
                 end
+%                     line(ax(j),[1,1]*starts(i+1),ylim,'color',[0,0.75,0],'tag','seg_start_line')
+%                     line(ax(j),[1,1]*stops(i),ylim,'color',[0.75,0,0],'tag','seg_stop_line')
+                
+                
             end
         end
         
         function plot_psd(expt)
             %BUG - per-axis isn't resetting when more than one segment
-            ax=gca;
-            reset(ax)
-            delete(findobj(ax,'tag','oscar_line'));
+%             ax=findobj(gcf,'type','axes');
+%             ax=flipud(ax);
+%             reset(ax)
+            delete(findobj(gcf,'tag','oscar_line'));
             
             for i=1:expt.nS
-                subplot(expt.nS,1,i)
-%                 line(expt.f,expt.psd(:,expt.tix,i),'tag','oscar_line'); 
-                line(expt.f,[expt.psd(:,expt.tix,i),expt.psdFilt(:,expt.tix,i)],'tag','oscar_line'); 
-                legend({'detrended','filtered'},'AutoUpdate','off')
-                title(expt.segment(i).name)
+                ax(i)=subplot(expt.nS,1,i);
+%                 axes(ax(i))
+%                 psd=expt.psd(:,expt.tix,i);
+                psd=[expt.psd(:,expt.tix,i),expt.psdFilt(:,expt.tix,i)];
+                line(ax(i),expt.f,psd,'tag','oscar_line'); 
+                title(ax(i),expt.segment(i).name)
+                axis(ax(i),'tight')
             end     
             xlabel('frequency')
             ylabel('power');
-            axis tight
+            legend(ax(end),{'detrended','filtered'},'AutoUpdate','off')
             
+            maxFilt=max([expt.segment(1).features_trace(expt.tix).fmax, ...
+                         expt.segment(2).features_trace(expt.tix).fmax]);
+
             for i=1:expt.nS
-                subplot(expt.nS,1,i)
                 x=expt.segment(i).features_trace(expt.tix).fmax;
                 y=expt.segment(i).features_trace(expt.tix).Pmax;
-                line(x,y,'color','r','marker','v','tag','oscar_line'); 
+                line(ax(i),x,y,'color','r','marker','v','tag','oscar_line'); 
+                xlim(ax(i),[0,maxFilt*3]);
             end     
-            maxFilt=max(expt.psdFilt(:,expt.tix,i));
-            UB=expt.f(find(expt.psdFilt(:,expt.tix,i)>0.0025*maxFilt,1,'last'));
-            xlim([0,UB]);
         end
         
         function plot_features_periods(expt)
@@ -966,14 +1360,27 @@ classdef Experiment < handle & matlab.mixin.Copyable
             reset(ax)
             delete(findobj(ax,'tag','oscar_line'));
             
+            fig=gcf;
+            xfeat=fig.UserData{2};
+            yfeat=fig.UserData{3};
+            
             xJitter=0.05; %make this a property of the class?
            
             XX=cell(1,expt.nS);
             YY=cell(1,expt.nS);
-            colorBySegment=false;  %TODO: always color by segment?
             for i=1:expt.nS
                         
-                y=expt.segment(i).features_periods(expt.tix).(expt.yfeature);
+                yall=[];
+                yallix=[];
+                includeix=[];
+                for e=1:expt.nX
+                    thise=expt.segment(i).features_periods(e).(yfeat);
+                    yall=[yall,thise];
+                    yallix=[yallix,e*ones(size(thise))];
+                    includeix=[includeix,expt.include(e)*ones(size(thise))];
+                end
+
+                y=yall(yallix==expt.tix);
                 if isempty(y)
                     return
                 end
@@ -981,27 +1388,32 @@ classdef Experiment < handle & matlab.mixin.Copyable
                 switch expt.xfeature
                     case {'t'}
                         %TODO: option for marker location?
-                         x=(expt.segment(i).points(expt.tix).period.t(1:end-1)+expt.segment(i).points(expt.tix).period.t(2:end))/2; %midpoint of period
-%                         x=expt.segment(i).points(expt.tix).max.t;
-%                         x=expt.segment(i).points(expt.tix).min.t(1:end-1); %first min
-%                         x=expt.segment(i).points(expt.tix).min.t(2:end); %second min
-%                         x=expt.segment(i).points(expt.tix).down.t;
-%                         x=expt.segment(i).points(expt.tix).up.t;
-%                         x=(expt.segment(i).points(expt.tix).down.t+expt.segment(i).points(expt.tix).period.t(2:end))/2; %midpoint of silent post active
-%                         x=(expt.segment(i).points(expt.tix).up.t+expt.segment(i).points(expt.tix).period.t(1:end-1))/2; %midpoint of silent pre active   
-                        
+                        fun=@(x) ([x.period(:).t(1:end-1)]+[x.period(:).t(2:end)])/2;
+                        xall=arrayfun(fun, expt.segment(i).points, 'UniformOutput', false);
+                        xall=[xall{:}];
+
+                        %omit period=0
+                        per=[expt.segment(i).features_periods(:).period];
+                        yall(per==0)=[];
+                        yallix(per==0)=[];
+                        includeix(per==0)=[];
+
                     case {'segment'}
                         %TODO: option for violin plot, boxplot?
-                        x=i+xJitter*randn(1,length(y));
+                        rng(42)
+                        xall=i+xJitter*randn(1,length(yall));
+%                         x=i+xJitter*randn(1,length(y));
 %                         colorBySegment=true;
 
                     case expt.fnames_periods
-                        x=expt.segment(i).features_periods(expt.tix).(expt.xfeature);
+                        xall=[expt.segment(i).features_periods(:).(xfeat)];
+%                         x=expt.segment(i).features_periods(expt.tix).(xfeat);
 %                         colorBySegment=true;
 
                     otherwise
-                        error(['Invalid name for x-axis: ' expt.xfeature])
+                        error(['Invalid name for x-axis: ' xfeat])
                 end
+                x=xall(yallix==expt.tix);
                 
                 if isempty(x)
                     y=[];
@@ -1009,19 +1421,41 @@ classdef Experiment < handle & matlab.mixin.Copyable
                 
                 XX{i}=x;
                 YY{i}=y;
+                XXall{i}=xall;
+                YYall{i}=yall;
+                INCIX{i}=logical(includeix);
 
             end
                           
             
             hl=matlab.graphics.chart.primitive.Line.empty(expt.nS,0);
+            hl2=matlab.graphics.chart.primitive.Line.empty(expt.nS-1,0);
             for i=1:expt.nS
                 col=ax.ColorOrder(mod(i-1,length(ax.ColorOrder(:,1)))+1,:);
+                if ~isempty(XXall{i})&&~isempty(INCIX{i})
+                    line(XXall{i}(INCIX{i}),YYall{i}(INCIX{i}),'marker','o','linestyle','none',...
+                        'color',0.75*[1,1,1],'tag','oscar_line');
+                    line(XXall{i}(~INCIX{i}),YYall{i}(~INCIX{i}),'marker','x','linestyle','none',...
+                        'color',0.75*[1,1,1],'tag','oscar_line');
+                end
                 if ~isempty(XX{i})
-                    hl(i,1)=line(XX{i},YY{i},'marker','o','linestyle','none','color',col,'tag','oscar_line');
+                    if (expt.include(expt.tix))
+                    hl(i,1)=line(XX{i},YY{i},'marker','o','linestyle','-',...
+                        'color',col,'tag','oscar_line');
+                    else
+                    hl(i,1)=line(XX{i},YY{i},'marker','x','linestyle','-',...
+                        'color',col,'tag','oscar_line');
+                    end
+                    if i<expt.nS
+                        hl2(i,1)=line([XX{i}(end),XX{i+1}(1)],[YY{i}(end),YY{i+1}(1)], ...
+                            'marker','none','linestyle','-',...
+                            'color',col,'tag','oscar_line');
+                    end
                 end
             end
+%             colorBySegment=false;  %TODO: always color by segment?
 %             if colorBySegment
-                legend(hl,[expt.segment(:).name],'AutoUpdate','off') %TODO: option to suppress legend?
+%                 legend(hl,[expt.segment(:).name],'AutoUpdate','off') %TODO: option to suppress legend?
 %             else
 %                 legend('off')
 %                 for i=1:expt.nS
@@ -1033,7 +1467,7 @@ classdef Experiment < handle & matlab.mixin.Copyable
             
             axis tight
             
-            switch expt.xfeature
+            switch xfeat
                     case {'t'}
                         for i=1:expt.nS
                             if strcmpi(class(hl(i)),'matlab.graphics.chart.primitive.Line')
@@ -1049,12 +1483,12 @@ classdef Experiment < handle & matlab.mixin.Copyable
                         
                     case {'segment'} %TODO: do jitter here?
                         xticks(1:expt.nS)
-%                         xticklabels({expt.segment.name})
+                        xticklabels([expt.segment(:).name])
                         xlim([0.5,expt.nS+0.5])
             end
             
-            xlabel(expt.xfeature)
-            ylabel(expt.yfeature)
+            xlabel(xfeat)
+            ylabel(yfeat)
             
         end
         
@@ -1064,6 +1498,10 @@ classdef Experiment < handle & matlab.mixin.Copyable
             reset(ax)
             delete(findobj(ax,'tag','oscar_line'));
             
+            fig=gcf;
+            xfeat=fig.UserData{2};
+            yfeat=fig.UserData{3};
+            
             HX=[];
             HY=[];
             XX=[];
@@ -1071,24 +1509,24 @@ classdef Experiment < handle & matlab.mixin.Copyable
             
             for i=1:expt.nS
                 
-                switch expt.xfeature
+                switch xfeat
                         
                     case {'segment'}
                         %plot all trace data as line seg, highlight point expt.tix
                         xx=i*ones(1,expt.N);
-                        yy=[expt.segment(i).features_trace.(expt.yfeature)];
+                        yy=[expt.segment(i).features_trace.(yfeat)];
                         HX(end+1,1)=i;
                         HY(end+1,1)=yy(expt.tix);
                         
 
                     case expt.fnames_trace
-                        xx=[expt.segment(i).features_trace.(expt.xfeature)];
-                        yy=[expt.segment(i).features_trace.(expt.yfeature)];
+                        xx=[expt.segment(i).features_trace.(xfeat)];
+                        yy=[expt.segment(i).features_trace.(yfeat)];
                         HX(end+1,1)=xx(expt.tix);
                         HY(end+1,1)=yy(expt.tix);
 
                     otherwise
-                        error(['Invalid name for x-axis: ' expt.xfeature])
+                        error(['Invalid name for x-axis: ' xfeat])
                 end
                 
                 XX(end+1,:)=xx;
@@ -1110,7 +1548,12 @@ classdef Experiment < handle & matlab.mixin.Copyable
             %markers
             
             ax.ColorOrderIndex=1;
-            hmAll=line(XX',YY','marker','o','linestyle','none','tag','oscar_line');
+            hmAll=line(XX(:,expt.include)',YY(:,expt.include)','marker','o',...
+                'linestyle','none','tag','oscar_line');
+            
+            hmAllex=line(XX(:,~expt.include)',YY(:,~expt.include)','marker','x',...
+                'linestyle','none','tag','oscar_line');
+            
             axis tight
             
             for i=1:expt.nS
@@ -1127,25 +1570,22 @@ classdef Experiment < handle & matlab.mixin.Copyable
 %             end
 %             axis tight
             
-            line(XX(~expt.include)',YY(~expt.include)','color','k',...
-                'linestyle','none','marker','x','tag','oscar_line');
-            
             if expt.nS>1
                 legend(hmAll,[expt.segment(:).name],'AutoUpdate','off')
             end
             
-            if expt.xfeature=="segment"
+            if xfeat=="segment"
                 xticks(1:expt.nS)
 %                 xticklabels({expt.segment.name})
                 xlim([0.5,expt.nS+0.5])
             end
             
-            if (expt.xfeature=="periodMean"||expt.xfeature=="Tpsd") && (expt.yfeature=="periodMean"||expt.yfeature=="Tpsd")
+            if (xfeat=="periodMean"||xfeat=="Tpsd") && (yfeat=="periodMean"||yfeat=="Tpsd")
                 line(xlim,xlim,'tag','oscar_line')
             end
             
-            xlabel(expt.xfeature)
-            ylabel(expt.yfeature)
+            xlabel(xfeat)
+            ylabel(yfeat)
             
         end
         
@@ -1158,20 +1598,21 @@ classdef Experiment < handle & matlab.mixin.Copyable
             if ~isempty(expt.fig_handles)
                 
             for i=1:length(expt.fig_handles)
-                figData=expt.fig_handles(i).UserData;
+                thisfig=expt.fig_handles(i);
+                figData=thisfig.UserData;
                 plotType=figData{1};
                 
                 if isequal(plotType,type)||type=="all"
-                    figure(expt.fig_handles(i));
+                    figure(thisfig);
                     switch plotType
                         case 'trace'
                             whichPlot=figData{2};
                             showPts=figData{3};
 
                             nPlots=length(whichPlot);
+                            ax=thisfig.Children;
                             for j=1:nPlots
-                                %TODO: use tight_subplot?
-                                subplot(nPlots,1,j);
+                                axes(ax(nPlots+1-j));
                                 expt.plot_t(whichPlot{j},showPts)
                             end
 
@@ -1179,22 +1620,20 @@ classdef Experiment < handle & matlab.mixin.Copyable
                             expt.plot_psd()
 
                         case 'feature'
-                            
-                            switch expt.featurePlotType
+                            featPlotType=figData{4};
+                            switch featPlotType
                                 case 'per-period'
                                     expt.plot_features_periods();
                                 case 'per-trace'
                                     expt.plot_features_trace();
                             end
+                        case 'results'
+                            
                     end
                 end
             end
             
-%             if expt.active_fig~=expt.resfig
-                figure(expt.active_fig);
-%             else
-%                 figure(expt.fig_handles(1))
-%             end
+            figure(expt.active_fig);
             end
             
         end
@@ -1206,19 +1645,22 @@ classdef Experiment < handle & matlab.mixin.Copyable
                     %previous trace
                     if expt.tix>1
                         expt.tix=expt.tix-1;
-                        expt.updatePlots();
+                        expt.updatePlots()
                     end
                     
                 case {'rightarrow'}
                     %next trace
                     if expt.tix<expt.N
                         expt.tix=expt.tix+1;
-                        expt.updatePlots();
+                        expt.updatePlots()
                     end
+                    
+                case 'e'
+                    %set enpoints of intervals
                     
                 case 'f'
                     %select features to plot
-                    expt.selectFeaturesPopup();
+                    expt.selectFeaturesPopup()
                     
                 case 'g'
                     %pre-toggle actions
@@ -1246,45 +1688,55 @@ classdef Experiment < handle & matlab.mixin.Copyable
                         expt.N=expt.nX;
                     end
                     
-                    expt.preprocess();
-                    expt.compute_features();
+                    expt.preprocess()
+                    expt.compute_features()
                     expt.updatePlots()
-                    expt.displayResults();
+                    expt.displayResults(0)
                     
                 case 'i'
                     %toggle include
                     expt.include(expt.tix)=~expt.include(expt.tix);
                     
                     expt.updatePlots('feature')
-                    expt.buildResultsTable();
-                    expt.displayResults();
+                    expt.buildResultsTable()
+                    expt.displayResults(0)
                     
                 case 'p'
                     %parameter dialog
-                    expt.parameterDialog();
+                    expt.parameterDialog()
                     %needs full pipeline helper function
-                    
-                case 's'
-                    %save results
-                    expt.writeToExcel();
                     
                 case 'q'
                     %quit - close all windows
                     expt.quit();
+                    
+                case 'r'
+                    %re-run analysis
+                    expt.preprocess()
+                    expt.compute_features()
+                    expt.updatePlots()
+                    
+                case 's'
+                    %save results
+%                     expt.writeToExcel()
+                    expt.saveResults()
+                    
+                    
             end
         end
         
         function figureCloseFcn(expt,~,~)
-            me=gcf;
-            expt.fig_handles(ismember(expt.fig_handles,me))=[];
-            delete(me)
+            thisfig=gcf;
+%             expt.gobj_array(ismember(expt.gobj_array, thisfig.Children))=[];
+            expt.fig_handles(ismember(expt.fig_handles,thisfig))=[];
+            delete(thisfig)
         end
         
         function resfigCloseFcn(expt,~,~)
-            me=gcf;
-            if isequal(expt.resfig,me) 
+            thisfig=gcf;
+            if isequal(expt.resfig,thisfig) 
                 expt.resfig=[];
-                delete(me)
+                delete(thisfig)
             end
         end
         
@@ -1329,12 +1781,15 @@ classdef Experiment < handle & matlab.mixin.Copyable
             function launchFeatureUpdate(~,~)
                 
                 for i=1:length(expt.fig_handles)
-                    if strcmp(expt.fig_handles(i).UserData,'feature')
+                    if strcmp(expt.fig_handles(i).UserData{1},'feature')
+                        expt.fig_handles(i).UserData{2}=expt.xfeature;
+                        expt.fig_handles(i).UserData{3}=expt.yfeature;
+                        expt.fig_handles(i).UserData{4}=expt.featurePlotType;
                         expt.active_fig=expt.fig_handles(i);
+                        expt.updatePlots('feature')
                     end
                 end
                 
-                expt.updatePlots('feature')
             end
             
             function changeRadio(~,cbdata)
@@ -1373,6 +1828,7 @@ classdef Experiment < handle & matlab.mixin.Copyable
                     expt.yfeature=cbdata.EditData;
                 end
             end
+
 
         end
         
@@ -1413,7 +1869,7 @@ classdef Experiment < handle & matlab.mixin.Copyable
                     expt.preprocess();
                     expt.compute_features();
                     expt.updatePlots()
-                    expt.displayResults();
+                    expt.displayResults(0);
                 end
             end
         end
@@ -1430,4 +1886,42 @@ classdef Experiment < handle & matlab.mixin.Copyable
             end
         end
     end
+end
+
+        
+function offset = getFlattenOffset(Xnorm, Xt, flattenMethod)
+
+    X=Xnorm;
+    doNeg=false;
+    if endsWith(flattenMethod,"Trend")
+        flattenMethod=strrep(flattenMethod,'Trend','');
+        X=Xt;
+    elseif endsWith(flattenMethod,"Detrend")
+        flattenMethod=strrep(flattenMethod,'Detrend','');
+        X=Xnorm-Xt; 
+        doNeg=true;%reverese sign makes this work...
+    end
+        
+    offset=0;
+    switch flattenMethod
+        case 'none'
+            offset=0;
+        case 'first'
+            offset=X(1,:);
+        case 'min'
+            offset=min(X,[],1);
+        case 'max'
+            offset=max(X,[],1);
+        case 'mean'
+            offset=mean(X,1);
+        case 'median'
+            offset=median(X,1);
+        otherwise
+            error(['Unknown flatten method: ', flattenMethod])
+    end
+    
+    if doNeg
+        offset=-offset;
+    end
+    
 end

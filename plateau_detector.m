@@ -40,7 +40,7 @@ function [F,Fdist,points,fcns]=plateau_detector(t, X, varargin)
 
 %TODO: scalar feature summary output
 
-%TODO: per-period feature idea 
+%TODO: per-period feature idea
 %       - phase of special point within current period (eg. phase of max V1 relative to period detected in V2)
 
 
@@ -48,17 +48,19 @@ if isvector(X)
     X=X(:);
 end
 
-[thrPtiles,fracUp,fracDown,minAmp,threshMethod,doInterp,doPlot,figID,dokeypress]=parseArgs(t, X, varargin{:});
+[thrPtiles,fracUp,fracDown,fracUpDx,fracDownDx,minAmp,threshMethod,doInterp,doPlot,figID,dokeypress]=parseArgs(t, X, varargin{:});
 
 nX=size(X,2); %number of traces
 
-DX=slopeY(t,X); 
+DX=slopeY(t,X);
 
 globalXmin=prctile(X,thrPtiles(1),1);
 globalXmax=prctile(X,thrPtiles(2),1);
 globalXamp=globalXmax-globalXmin;
 
-sufficientGlobalAmp=globalXamp>minAmp;
+globalDXmin=prctile(DX,thrPtiles(1),1);
+globalDXmax=prctile(DX,thrPtiles(2),1);
+% globalDXamp=globalDXmax-globalDXmin;
 
 %independent thresholds for each trace
 switch lower(threshMethod)
@@ -94,26 +96,40 @@ switch lower(threshMethod)
         thrUp=medX + fracUp;
         thrDown=medX - fracDown;
 end
-
-% isUp=ones(1,nX); %forces first point to be downward transition
-% isUp=zeros(1,nX); %forces first point to be upward transition
-isUp=X(1,:)>thrUp;
-% isUp=X(1,:)>=thrUp | (X(1,:)<=thrUp&X(1,:)>=thrDown&DX(1,:)<0);
+thrUpDx=fracUpDx*globalDXmax;
+if fracDownDx>0
+    thrDownDx=fracDownDx*globalDXmin;
+else
+    thrDownDx=globalDXmin;
+end
 
 pt=struct('ix',[],'t',[],'x',[],'dx',[]);
 
 points=repmat(struct('period',pt,'up',pt,'down',pt,...
     'max',pt,'min',pt,'dxmax',pt,'dxmin',pt),1,nX);
 
+sufficientGlobalAmp=globalXamp>minAmp;
+
+% isUp=ones(1,nX); %forces first point to be downward transition
+% isUp=zeros(1,nX); %forces first point to be upward transition
+isUp=X(1,:)>thrUp;
+% isUp=X(1,:)>=thrUp | (X(1,:)<=thrUp&X(1,:)>=thrDown&DX(1,:)<0);
+
 for i=2:length(t)
     
-    %if strated up, then went below thrUp but not below thrDown, set isUp=0
-    firstDown=isUp & X(i,:)<thrUp & arrayfun(@(x)isempty(x.up.ix),points);
-    isUp(firstDown)=0;
     
     %check for downward-transition and upward-transition
-    isDownTransition=isUp&X(i,:)<=thrDown & sufficientGlobalAmp;
-    isUpTransition=~isUp&X(i,:)>=thrUp & sufficientGlobalAmp;
+    %     isDownTransition=isUp & X(i,:)<=thrDown;
+    %     isUpTransition=~isUp & X(i,:)>=thrUp;
+    isDownTransition=isUp & X(i,:)<=thrDown & DX(i,:)>=thrDownDx;
+    isUpTransition=~isUp & X(i,:)>=thrUp & DX(i,:)>=thrUpDx;
+    
+    isDownTransition(~sufficientGlobalAmp)=0;
+    isUpTransition(~sufficientGlobalAmp)=0;
+    
+    %if started up, then went below thrUp but not below thrDown, set isUp=0
+    firstDown=isDownTransition & arrayfun(@(x)isempty(x.up.ix),points);
+    isUp(firstDown)=0;
     
     if any(isDownTransition)
         idx=find(isDownTransition);
@@ -124,7 +140,12 @@ for i=2:length(t)
             if doInterp
                 %interpolate t
                 thisX=thrDown(j);
-                thisT=(thrDown(j)-X(i-1,j))*(t(i)-t(i-1))/(X(i,j)-X(i-1,j))+t(i-1);
+                thisDX=thrDownDx(j);
+                thisT=interp1(X(i-1:i,j),t(i-1:i),thisX);
+                if isnan(thisT)
+                    thisT=interp1(DX(i-1:i,j),t(i-1:i),thisDX);
+                end
+                %                     thisT=(thrDown(j)-X(i-1,j))*(t(i)-t(i-1))/(X(i,j)-X(i-1,j))+t(i-1);
             else
                 thisT=t(i);
                 thisX=X(i,j);
@@ -144,7 +165,12 @@ for i=2:length(t)
             if doInterp
                 %interpolate t
                 thisX=thrUp(j);
-                thisT=(thrUp(j)-X(i-1,j))*(t(i)-t(i-1))/(X(i,j)-X(i-1,j))+t(i-1);
+                thisDX=thrUpDx(j);
+                thisT=interp1(X(i-1:i,j),t(i-1:i),thisX);
+                if isnan(thisT)
+                    thisT=interp1(DX(i-1:i,j),t(i-1:i),thisDX);
+                end
+                %                     thisT=(thrUp(j)-X(i-1,j))*(t(i)-t(i-1))/(X(i,j)-X(i-1,j))+t(i-1);
             else
                 thisT=t(i);
                 thisX=X(i,j);
@@ -165,23 +191,29 @@ for i=1:nX
     points(i).period.x=points(i).up.x;
     
     if ~isempty(points(i).down.t) && ~isempty(points(i).up.t)
-    % trim away down transitions outside first/last up transitions
-    if points(i).down.t(1)<=points(i).up.t(1)
-        points(i).down.ix=points(i).down.ix(2:end);
-        points(i).down.t=points(i).down.t(2:end);
-        points(i).down.x=points(i).down.x(2:end);
+        % trim away down transitions outside first/last up transitions
+        if points(i).down.t(1)<points(i).up.t(1)
+            points(i).down.ix=points(i).down.ix(2:end);
+            points(i).down.t=points(i).down.t(2:end);
+            points(i).down.x=points(i).down.x(2:end);
+        end
     end
-    if points(i).down.t(end)>=points(i).up.t(end)
-        points(i).down.ix=points(i).down.ix(1:end-1);
-        points(i).down.t=points(i).down.t(1:end-1);
-        points(i).down.x=points(i).down.x(1:end-1);
+    if ~isempty(points(i).down.t) && ~isempty(points(i).up.t)
+        if points(i).down.t(end)>points(i).up.t(end)
+            points(i).down.ix=points(i).down.ix(1:end-1);
+            points(i).down.t=points(i).down.t(1:end-1);
+            points(i).down.x=points(i).down.x(1:end-1);
+        end
     end
     
-    end
+    
 end
+
 
 %compute the extra points and features - per-period distributions
 [F,Fdist,points]=compute_features(t,X,points,DX);
+
+
 
 fcns.compute_features=@compute_features;
 fcns.plot_data=@plot_data; %simple plot fcn for one trace of interest
@@ -218,12 +250,12 @@ Fdist=repmat( struct('period',0,'apd',0,'spd',0,'pf',0,'f1',0,'f2',0,'f3',0,'f4'
 for i=1:nX
     
     %find the x value at up and down marker times (up is period marker)
-    points(i).up.x=interp1(t,X(:,i),points(i).up.t); 
+    %     points(i).up.x=interp1(t,X(:,i),points(i).up.t);
     points(i).period.x=points(i).up.x;
-    points(i).down.x=interp1(t,X(:,i),points(i).down.t);
+    %     points(i).down.x=interp1(t,X(:,i),points(i).down.t);
     
     nPer=length(points(i).up.t)-1;
-        
+    
     if nPer>=1
         
         for j=1:nPer
@@ -266,7 +298,7 @@ for i=1:nX
         %     Fdist(i).pthresh=(thrUp(i)+thrDown(i))/2;
         
         Fdist(i).period=diff(points(i).up.t);
-        Fdist(i).apd=points(i).down.t-points(i).up.t(1:end-1); %active phase duration
+        Fdist(i).apd=points(i).down.t-points(i).up.t(1:end-1); %active phase duration: we stripped any extra down transitions
         Fdist(i).spd=Fdist(i).period-Fdist(i).apd;
         Fdist(i).pf=Fdist(i).apd./Fdist(i).period;
         Fdist(i).f1=(points(i).max.t-points(i).up.t(1:end-1))./Fdist(i).period; %up2max time
@@ -305,7 +337,7 @@ fnames=fieldnames(Fdist);
 for i=1:nX
     for j=1:length(fnames)
         F(i).([fnames{j},'Mean'])=mean(Fdist(i).(fnames{j}));
-%         F(i).([fnames{j},'Stdev'])=std(Fdist(i).(fnames{j}));
+        %         F(i).([fnames{j},'Stdev'])=std(Fdist(i).(fnames{j}));
     end
 end
 
@@ -371,14 +403,15 @@ plot_data(t,X,points,tix)
 src.UserData.tix=tix;
 end
 
-function [thrPtiles,fracUp,fracDown,minAmp,threshMethod,doInterp,doPlot,figID,dokeypress]=parseArgs(t, X, varargin)
+function [thrPtiles,fracUp,fracDown,fracUpDx,fracDownDx,minAmp,threshMethod,doInterp,doPlot,figID,dokeypress]=parseArgs(t, X, varargin)
 
 %default parameters
 defaultF=[0.5,0.4]; %near halfmax
+defaultFslope=[0,0];
 defaultthrPtiles=[0,100];
 defaultminAmp=0;
 defaultThresholdMethod='fracamp';
-doInterp=true;
+doInterp=0;
 doPlot=false;
 doKeypress=true;
 figID=[];
@@ -408,12 +441,19 @@ doPlot=p.Results.Plot;
 figID=p.Results.FigureID;
 dokeypress=p.Results.Keypress;
 
+fracUpDx=defaultFslope(1);
+fracDownDx=defaultFslope(2);
 if isscalar(f)
     fracUp=f;
     fracDown=f;
 elseif length(f)==2
     fracUp=f(1);
     fracDown=f(2);
+elseif length(f)==4
+    fracUp=f(1);
+    fracDown=f(2);
+    fracUpDx=f(3);
+    fracDownDx=f(4);
 else
     error('Invalid value for fractional threshold')
 end

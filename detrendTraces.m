@@ -28,6 +28,13 @@ switch lower(method)
         for i=1:nX
             XTrend(:,i)=polyval(polyfit(t,X(:,i),1),t);
         end
+        
+    case {'robustlin'}
+        
+        for i=1:nX
+            brob = robustfit(t,X(:,i));
+            XTrend(:,i)=brob(1)+brob(2)*t;
+        end
 
     case {'poly','polynomial'}
         
@@ -46,10 +53,14 @@ switch lower(method)
         %use a moving window prctile
         %methodparam=window width
         if ~exist('methodparam','var')||isempty(methodparam)
-            error('smoothdata trendline requires a window duration (in time units)');
+            error('ptile trendline requires a window duration (in time units) and a prctile');
         else
             wwidth=methodparam{1};
             ptile=methodparam{2};
+        end
+        if wwidth>(t(end)-t(1))
+            wwidth=(t(end)-t(1));
+            warning(['windowsize shrunk to time interval, ', num2str(wwidth) ])
         end
         wsz=round(wwidth/dt);
         wsz=max(wsz,1);
@@ -92,6 +103,11 @@ switch lower(method)
             error('smoothdata trendline requires a window duration (in time units)');
         else
             wwidth=methodparam;
+        end
+        
+        if wwidth>(t(end)-t(1))
+            wwidth=(t(end)-t(1));
+            warning(['windowsize shrunk to time interval, ', num2str(wwidth) ])
         end
         
         wsz=round(wwidth/dt);
