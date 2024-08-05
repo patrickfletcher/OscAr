@@ -183,8 +183,12 @@ if nargout==0 || doPlot==1
     
     nX=size(X,2);
     tix=1;
-    figure('name','Normalize Traces','KeyPressFcn',@keypressFcn);
+    fh=figure('name','Normalize Traces','KeyPressFcn',@keypressFcn);
+    XLIM = [min(t), max(t)];
+    YLIM = [min(X(:)), max(X(:))];
+    YLIMn = [min(XNorm(:)), max(XNorm(:))];
     plotData()
+    axis tight
     
 end
 
@@ -207,14 +211,20 @@ end
         grid on
         xlabel('Time')
         %         ylabel('raw')
-        axis tight
+        xlim(XLIM)
+        ylim(YLIM)
+        title(tix)
+        line(t,X,-1*ones(size(t)),'Color',0.7*[1,1,1])
+
         
         subplot(2,1,2)
         plot(t,XNorm(:,tix))
         grid on
         xlabel('Time')
         ylabel('normalized')
-        axis tight
+        xlim(XLIM)
+        ylim(YLIMn)
+        line(t,XNorm,-1*ones(size(t)),'Color',0.7*[1,1,1])
         
     end
 

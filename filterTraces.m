@@ -15,31 +15,20 @@ if ~exist('doPlot','var')
     doPlot=0;
 end
 
-steepness=0.5;
-stopAtten=90;
+steepness=0.85;
+stopAtten=60;
 
 tfilt=t;
 switch lower(method)
     case {'none'}
         XFilt=X;
         
-    case {'lowpass'}
-        
-        %methodparam=lowpass cutoff frequency
-        if ~exist('methodparam','var')
-            error('lowpass trendline requires a cutoff frequency');
-        else
-            fpass=methodparam;
-        end
-        
-%         XFilt=lowpass(X,fpass,fs,'ImpulseResponse','iir');
-        XFilt=lowpass(X,fpass,fs,'ImpulseResponse','iir','Steepness',steepness,'StopbandAttenuation',stopAtten);
-    
+
     case {'movmean','movmedian','gaussian','lowess','loess','rlowess','rloess','sgolay'}
         
         %methodparam=window width
         if ~exist('methodparam','var')
-            error('smoothdata trendline requires a window duration (in time units)');
+            error('smoothdata requires a window duration (in time units)');
         else
             wwidth=methodparam;
         end
@@ -47,19 +36,43 @@ switch lower(method)
         wsz=round(wwidth/dt);
         wsz=max(wsz,1);
         XFilt=smoothdata(X,method,wsz);
+
+    case {'lowpass'}
         
+        %methodparam=lowpass cutoff frequency
+        if ~exist('methodparam','var')
+            error('lowpass requires a cutoff frequency');
+        else
+            fpass=methodparam;
+        end
+        
+%         XFilt=lowpass(X,fpass,fs,'ImpulseResponse','iir');
+        XFilt=lowpass(X,fpass,fs,'ImpulseResponse','auto','Steepness',steepness,'StopbandAttenuation',stopAtten);
+       
+    case {'highpass'}
+        
+        %methodparam=lowpass cutoff frequency
+        if ~exist('methodparam','var')
+            error('lowpass requires a cutoff frequency');
+        else
+            fpass=methodparam;
+        end
+        
+%         XFilt=lowpass(X,fpass,fs,'ImpulseResponse','iir');
+        XFilt=highpass(X,fpass,fs,'ImpulseResponse','auto','Steepness',steepness,'StopbandAttenuation',stopAtten);
+    
     case {'bandpass'}
         %TODO: edge effect corrections
         
         %methodparam=lowpass cutoff frequency
         if ~exist('methodparam','var')
-            error('lowpass trendline requires a cutoff frequency');
+            error('bandpass requires a low and high frequency cutoff');
         else
             fpass=methodparam;
         end
         
 %         XFilt=bandpass(X,fpass,fs,'ImpulseResponse','iir');
-        XFilt=bandpass(X,fpass,fs,'ImpulseResponse','iir','Steepness',steepness,'StopbandAttenuation',stopAtten);
+        XFilt=bandpass(X,fpass,fs,'ImpulseResponse','auto','Steepness',steepness,'StopbandAttenuation',stopAtten);
 end
 
 % if doTrim

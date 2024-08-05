@@ -107,7 +107,7 @@ switch lower(method)
         
         if wwidth>(t(end)-t(1))
             wwidth=(t(end)-t(1));
-            warning(['windowsize shrunk to time interval, ', num2str(wwidth) ])
+            % warning(['windowsize shrunk to time interval, ', num2str(wwidth) ])
         end
         
         wsz=round(wwidth/dt);

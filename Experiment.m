@@ -4,38 +4,21 @@ classdef Experiment < handle & matlab.mixin.Copyable
 
     
     %TODO: Force user to load data into Matlab? data=[t,X];
-    
-    %TODO: make parameterDialog a regular figure with "go" button, like
-    %selectFeaturesPopup
-    
-    
-    %TODO: add normalization to parameterDialog
-    
+        
     %TODO: get valid options for preprocessing functions exported from those
     %functions to display in dropdown lists
     
-    %TODO: forced order, but flags to choose which steps (if any) to apply?
-    %     - alt: arbitrary list of operations, with fully qualified options.
     %TODO: Customizeable pipeline? eg. array processingStep objects to define
     %steps (name+operation+method+params), and pointer to which one
     %gets periods measured and which one features get measured. pages
     %of X correspond to each step: eg. X(:,:,1)=raw, X(:,:,2)=norm, ..., X(:,:,end)=per
     
-    
-    %TODO: plotting alternatives - plot all timeseries onces, and use an
-    %update function to set the visibility on/off (also would support
-    %option to plot out-of-focus traces as light gray)
-    
-    %TODO: updatePlots needs to be axis-aware? store plottype & extra info
-    %in axis userdata not figure? store axes handles instead of figure
-    %handles? => single figure GUI 
-    
     %TODO: plot mean+/- stdev for per-trace features, when these are distrubtions for the trace. or boxplot. or violin.
-    %if so, remove the stdev from features to plot list.
-    
+    %if so, remove the stdev from features to plot list
     
     %TODO: finalize private/public properties and methods for full OOP
-        
+
+    %TODO: separate the plotting/UI from data ops?
     
     %TODO: support 3D array - 3rd dim is observable id (one [nT x nX] page per observable)
     % this requires supporting different pipeline options for each
@@ -100,8 +83,6 @@ classdef Experiment < handle & matlab.mixin.Copyable
     
     %store parameters used
     properties
-
-%support variable length parameter lists, eg. for name-value pairs
         normMethod='none'
         normParam=[]
         normPerSegment=false
@@ -133,14 +114,12 @@ classdef Experiment < handle & matlab.mixin.Copyable
     properties (SetAccess=protected)
         %interactive plots:
         fig_handles=matlab.ui.Figure.empty() %array of figure handles spawned by this object - use to synchronize trace in focus?
-%         gobj_array=gobjects()
         tix %in focus
         active_fig %index into fig_handles to maintain its focus upon updates
         featurePlotType='per-period'
         xfeature='segment'
         yfeature='period'
         
-        resfig=matlab.ui.Figure.empty %figure to show the results table
         featureSelectDlg
         paramDlg 
     end
@@ -152,18 +131,23 @@ classdef Experiment < handle & matlab.mixin.Copyable
         % Experiment(filename): looks for given file
         % Experiment(data): uses numeric matrix data=[t,X]
         % TODO: Experiment(___,Name,Value) : name-value pairs to set parameters, metadata, etc.
-        function expt=Experiment(varargin)
+        function expt=Experiment(file_or_data)
+            arguments
+                file_or_data=[]
+            end
             
             %parse inputs
             loadFile=true;
             fullfilename=[];
             filename=[];
-            if ~isempty(varargin) && ( ischar(varargin{1}) || isstring(varargin{1}) )
-                [path,filename,ext]=fileparts(varargin{1});
-                fullfilename=[path,filesep,filename,ext];
-            elseif ~isempty(varargin) && isnumeric(varargin{1}) && ~isempty(varargin{1})
-                data=varargin{1};
-                loadFile=false;
+            if ~isempty(file_or_data) 
+                if ischar(file_or_data) || isstring(file_or_data)
+                    [path,filename,ext]=fileparts(file_or_data);
+                    fullfilename=[path,filesep,filename,ext];
+                elseif isnumeric(file_or_data)
+                    data=file_or_data;
+                    loadFile=false;
+                end
             end
             
             %load a new file
@@ -173,27 +157,31 @@ classdef Experiment < handle & matlab.mixin.Copyable
                     fullfilename=[path,filename];
                 end
                 
-                [num,txt,raw]=xlsread(fullfilename);
-                %extract data
-%                 ixs=find(cellfun(@(x)(isnumeric(x)&&~isnan(x)),raw(:,1)),1,'first');
-%                 data=cell2mat(raw(ixs:end,1:size(num,2)));
-%                 ixs=find(cellfun(@(x)(isnumeric(x)&&~isnan(x)),raw(:,1)),1,'first');
-                data=num;
-                
-                %look for special metadata entries
-                headerNames=txt(:,1);
-                keyword={'name','date','sex','condition'};
-                for i=1:length(keyword)
-                    r=find(strcmpi(headerNames,keyword{i}));
-                    if ~isempty(r)
-                        expt.(keyword{i})=txt{r,2};
-                    end
-                end
-                
-                r=find(strcmpi(headerNames,'group'));
-                if ~isempty(r)
-                    expt.setGroup(cell2mat(raw(r,2:size(num,2))))
-                end
+                %TODO: move to tables. Handle case of extra header lines?
+                datatab = readtable(fullfilename,VariableNamingRule='preserve');
+                data = datatab{:,:};
+
+                % [num,txt,raw]=xlsread(fullfilename);
+                % % extract data
+                % % ixs=find(cellfun(@(x)(isnumeric(x)&&~isnan(x)),raw(:,1)),1,'first');
+                % % data=cell2mat(raw(ixs:end,1:size(num,2)));
+                % % ixs=find(cellfun(@(x)(isnumeric(x)&&~isnan(x)),raw(:,1)),1,'first');
+                % data=num;
+                % 
+                % %look for special metadata entries
+                % headerNames=txt(:,1);
+                % keyword={'name','date','sex','condition'};
+                % for i=1:length(keyword)
+                %     r=find(strcmpi(headerNames,keyword{i}));
+                %     if ~isempty(r)
+                %         expt.(keyword{i})=txt{r,2};
+                %     end
+                % end
+                % 
+                % r=find(strcmpi(headerNames,'group'));
+                % if ~isempty(r)
+                %     expt.setGroup(cell2mat(raw(r,2:size(num,2))))
+                % end
                 
             end
             
@@ -207,11 +195,11 @@ classdef Experiment < handle & matlab.mixin.Copyable
             DT=mode(diff(time)); 
 
 
-            isAllZero=all(Xraw==0,1);
-            if any(isAllZero)
-                expt.notes=[expt.notes,{'removed all zero column(s)'}];
-                Xraw(:,isAllZero)=[];
-            end
+            % isAllZero=all(Xraw==0,1);
+            % if any(isAllZero)
+            %     expt.notes=[expt.notes,{'removed all zero column(s)'}];
+            %     Xraw(:,isAllZero)=[];
+            % end
 
             %interpolate any missing data using neighboring time points
             %TODO: make this optional?
@@ -227,6 +215,7 @@ classdef Experiment < handle & matlab.mixin.Copyable
             end
             
             rowIsNan=any(isnan(Xraw),2);
+            t_mark = time(rowIsNan);
             if any(rowIsNan)
                 expt.notes=[expt.notes,{'some rows have NaN'}];
                 time(rowIsNan)=[];
@@ -356,7 +345,7 @@ classdef Experiment < handle & matlab.mixin.Copyable
                 expt Experiment
                 method = 'none'
                 methodPar = []
-                normPerSegment = 0
+                normPerSegment = true
             end
             expt.normMethod=method;
             expt.normParam=methodPar;
@@ -368,9 +357,9 @@ classdef Experiment < handle & matlab.mixin.Copyable
                 expt Experiment
                 method = 'none'
                 methodPar = []
-                detrendPerSegment = 0
+                detrendPerSegment = true
                 flattenMethod = 'none'
-                flattenPerSegment = 0
+                flattenPerSegment = true
             end
             expt.trendMethod=method;
             expt.trendParam=methodPar;
@@ -384,7 +373,7 @@ classdef Experiment < handle & matlab.mixin.Copyable
                 expt Experiment
                 method = 'none'
                 methodPar = []
-                filterPerSegment = 0
+                filterPerSegment = true
             end
             expt.filterMethod=method;
             expt.filterParam=methodPar;
@@ -571,7 +560,7 @@ classdef Experiment < handle & matlab.mixin.Copyable
             if ~strcmp(expt.featureMethod,'none')
             expt.detect_periods();
             expt.periodogram();
-            expt.computeSegmentStats();
+            % expt.computeSegmentStats();
             expt.fnames_periods=fieldnames(expt.segment(1).features_periods)';
             expt.fnames_trace=fieldnames(expt.segment(1).features_trace)';
             expt.buildResultsTable();
@@ -584,33 +573,28 @@ classdef Experiment < handle & matlab.mixin.Copyable
         %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
         
         function plotTrace(expt,whichPlot,tix,showPts,doInteractive)
+            arguments
+                expt
+                whichPlot
+                tix = []
+                showPts = true
+                doInteractive = true
+            end
             %dispatch function for plotting expt data
-            
-            %TODO: support cell array for whichplot
                    
-            if exist('tix','var')&&~isempty(tix)
-                expt.tix=tix;
-            end
-            
-            if ~exist('showPts','var')||isempty(showPts)
-                showPts=true;
-            end
-            
-            if ~exist('doInteractive','var')||isempty(doInteractive)
-                doInteractive=true;
-            end
-            
             if ~iscell(whichPlot)
                 whichPlot={whichPlot};
+            end
+            if ~isempty(tix)
+                expt.tix=tix;
             end
             
             %interactive figure: set up callbacks
             if doInteractive
                 figID=gcf;
-                figID.Name=strcat('Traces: ',expt.name);
+                figID.Name=strcat('Traces: ', expt.filename);
                 figID.NumberTitle='off';
                 figID.KeyPressFcn=@expt.commonKeypress;
-%                 figID.Interruptible='off';
                 figID.UserData={'trace',whichPlot,showPts};
                 figID.CloseRequestFcn=@expt.figureCloseFcn;
                 if ~ismember(figID,expt.fig_handles)
@@ -620,13 +604,12 @@ classdef Experiment < handle & matlab.mixin.Copyable
             
             expt.active_fig=gcf;
             nPlots=length(whichPlot);
-%             tiledlayout(expt.active_fig, nPlots,1,'TileSpacing','compact','Padding','compact');
+            tiledlayout(expt.active_fig, nPlots,1,'TileSpacing','compact','Padding','compact');
             
             %set up the objects
             for j=1:nPlots
-%                 ax(j)=nexttile(j);
-                ax(j)=subplot(nPlots,1,j);
-%                 uistack(ax(j),'bottom')
+                ax(j)=nexttile(j);
+                % ax(j)=subplot(nPlots,1,j);
                 ax(j).XTick=[];
 %                 ax(j).YLabel.String=whichPlot;
                 
@@ -644,8 +627,8 @@ classdef Experiment < handle & matlab.mixin.Copyable
                     line(ax(j),nan,nan,'color','b','marker','d','linestyle','none','tag','up_line')
                     line(ax(j),nan,nan,'color','b','marker','o','linestyle','none','tag','down_line')
                     line(ax(j),nan,nan,'color','b','marker','s','linestyle','none','tag','period_line')
-                end
-                for i=1:expt.nS-1
+                % end
+                % for i=1:expt.nS-1
                     line(ax(j),nan,nan,'color',[0,0.75,0],'tag','seg_start_line')
                     line(ax(j),nan,nan,'color',[0.75,0,0],'tag','seg_stop_line')
                 end
@@ -653,26 +636,25 @@ classdef Experiment < handle & matlab.mixin.Copyable
             ax(end).XTickMode='auto';
             ax(end).XLabel.String='t';
             linkaxes(ax,'x')
-            
-%             expt.active_fig.Children=expt.active_fig.Children(nPlots:-1:1);
-            
             expt.updatePlots('trace')
-            
-%             uistack(
         end
         
         function plotPeriodogram(expt,tix,doInteractive)
-            %overlay psd for each segment
-            if ~isempty(expt.psd)
+            arguments
+                expt
+                tix = []
+                doInteractive = true
+            end
             
-            if exist('tix','var')&&~isempty(tix)
+            if ~isempty(tix)
                 expt.tix=tix;
             end
-            
-            if ~exist('doInteractive','var')||isempty(doInteractive)
-                doInteractive=true;
+
+            if isempty(expt.psd)
+                return
             end
-                      
+
+            %overlay psd for each segment
             if doInteractive
                 figID=gcf;
                 figID.Name=strcat('Periodogram: ',expt.filename);
@@ -688,33 +670,34 @@ classdef Experiment < handle & matlab.mixin.Copyable
             
             expt.plot_psd();
             expt.active_fig=gcf;
-            end
         end
         
         function plotFeatures(expt,xname,yname,tix,doInteractive)
+            arguments
+                expt
+                xname = []
+                yname = []
+                tix = []
+                doInteractive = true
+            end
             %TODO: how to manage plotting options?
-                
-%             if ~isempty(expt.segment(1).features)
             
-            if exist('tix','var')&&~isempty(tix)
+            if ~isempty(tix)
                 expt.tix=tix;
             end
             
-            if ~exist('doInteractive','var')||isempty(doInteractive)
-                doInteractive=true;
-            end
-            
-            %this part is a kludge
-            if exist('xname','var')&&~isempty(xname)
+            %validate passed xname, yname
+            if ~isempty(xname)
                 xname=validatestring(xname,['t','segment',expt.fnames_periods,expt.fnames_trace]);
             else
                 xname=expt.xfeature;
             end
-            if exist('yname','var')&&~isempty(yname)
+            if ~isempty(yname)
                 yname=validatestring(yname,[expt.fnames_periods,expt.fnames_trace]);
             else
                 yname=expt.yfeature;
             end
+
             if xname=="segment"
                 if ismember(yname,expt.fnames_periods)
                     featPlotType='per-period';
@@ -764,47 +747,56 @@ classdef Experiment < handle & matlab.mixin.Copyable
         % saving/displaying results
         %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
         
-        function displayResults(expt,createNewFig)
+        
+        function buildResultsTable(expt)
+            ID=repmat((1:expt.N)',expt.nS,1);
+            INC=repmat(expt.include',expt.nS,1);
+            GRP=repmat(expt.group',expt.nS,1);
+            SEG=[];TAB=table;
+            for i=1:expt.nS
+                SEG=[SEG;i*ones(expt.N,1)];
+                TAB=[TAB;struct2table(expt.segment(i).features_trace)];
+            end
+            expt.resultsTrace=table();
+            expt.resultsTrace.ID=ID;
+            expt.resultsTrace.Group=GRP;
+            expt.resultsTrace.Segment=SEG;
+            expt.resultsTrace.Include=INC;
+            expt.resultsTrace=[expt.resultsTrace,TAB];
+        end
+
+
+        %TODO: logic is messed up - this is acting like "plotTraces" etc above, which are user called
+        function displayResults(expt, doInteractive)
             arguments
                 expt Experiment
-                createNewFig=true 
+                doInteractive = true
             end
-            
             %simple table view of results to cross reference with traces
             %examined by keypress
-            %
+
+
             % keypress here to switch segment?
             %  TODO: include=true/false column, select traces for result
             %  export?
-            
             
             if isempty(expt.resultsTrace)
 %                 warning('results table is empty, nothing to do')
                 return
             end
 
-            figID=[];
-            if ~createNewFig %check if fig exists
-                for i=1:length(expt.fig_handles)
-                    if expt.fig_handles(i).UserData{1}=="results"
-                        figID=expt.fig_handles(i);
-                        break
-                    end
-                end
-            end
-            if isempty(figID)
-                figID=gcf; %uses current figure, or creates one if no figs
+            if doInteractive
+                figID = gcf;
                 figID.Name=strcat('Result Table: ',expt.filename);
                 figID.NumberTitle='off';
                 figID.KeyPressFcn=@expt.commonKeypress;
-                figID.UserData={'results'};
+                figID.UserData={"results"};
     %             figID.Interruptible='off';
                 figID.CloseRequestFcn=@expt.figureCloseFcn;
                 if ~ismember(figID,expt.fig_handles)
                     expt.fig_handles(end+1)=figID; %register the new fig with expt
                 end
             end
-            figure(figID);
             
             colnames=[{'Trace'};{'Group'};{'Segment'};{'Include'};fieldnames(expt.segment(1).features_trace)];
 %             colnames=[{'Trace'};{'Segment'};{'Include'};fieldnames(expt.segment(1).features_trace)];
@@ -821,13 +813,10 @@ classdef Experiment < handle & matlab.mixin.Copyable
             uit.RowName=[];
             uit.Units='normalized';
             uit.Position=[0.025,0.025,0.95,0.95];
-            
-            figure(figID) %bring focus back to figure (for keypressfcn)
-            figure(expt.active_fig) %bring focus back to active figure
+
+            % expt.active_fig = figID;
         end
-        
-%         function displayResultsKeypress
-%         end
+
 
         function destinationExperiment=copyProcessedData(expt, destinationExperiment)
             
@@ -890,7 +879,7 @@ classdef Experiment < handle & matlab.mixin.Copyable
             thisInfo.filterPerSegment=repmat(expt.filterPerSegment,expt.nS*expt.nX,1);
             thisInfo.featureMethod=repmat(string(expt.featureMethod),expt.nS*expt.nX,1);
             thisInfo.featureParam=repmat(expt.featureParam,expt.nS*expt.nX,1);
-            thisInfo.minAmp=repmat(expt.featureExtras{1}.MinimumAmplitude,expt.nS*expt.nX,1);
+            % thisInfo.minAmp=repmat(expt.featureExtras{1}.MinimumAmplitude,expt.nS*expt.nX,1);
 
             thisResult=expt.resultsTrace(:,3:end);
 
@@ -953,52 +942,28 @@ classdef Experiment < handle & matlab.mixin.Copyable
             
             writetable(expt.resultsTrace,outfilename);
         end
-        
-        function buildResultsTable(expt)
-            ID=repmat((1:expt.N)',expt.nS,1);
-            INC=repmat(expt.include',expt.nS,1);
-            GRP=repmat(expt.group',expt.nS,1);
-            SEG=[];TAB=table;
-            for i=1:expt.nS
-                SEG=[SEG;i*ones(expt.N,1)];
-                TAB=[TAB;struct2table(expt.segment(i).features_trace)];
-            end
-            expt.resultsTrace=table();
-            expt.resultsTrace.ID=ID;
-            expt.resultsTrace.Group=GRP;
-            expt.resultsTrace.Segment=SEG;
-            expt.resultsTrace.Include=INC;
-            expt.resultsTrace=[expt.resultsTrace,TAB];
-        end
-        
-        
-%         function set.tix(expt,newval)
-%             expt.tix=newval;
-%             expt.updatePlots();
-%         end
-        
-        function clearFigs(expt)
-            %need better way to keep track of all figs registered?
-            expt.resfig=matlab.ui.Figure.empty;
-            expt.active_fig=matlab.ui.Figure.empty;
-            expt.fig_handles=matlab.ui.Figure.empty;
-            expt.featureSelectDlg=matlab.ui.Figure.empty;
-        end
 
     end
     
     methods (Access=private)
         
+        function figureCloseFcn(expt,~,~)
+            thisfig=gcf;
+            expt.fig_handles(ismember(expt.fig_handles,thisfig))=[];
+            delete(thisfig)
+        end
+
+        function clearFigs(expt)
+            expt.active_fig=matlab.ui.Figure.empty;
+            expt.fig_handles=matlab.ui.Figure.empty;
+            expt.featureSelectDlg=matlab.ui.Figure.empty;
+        end
+        
         
         %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
         % Analysis functions
         %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-        function detect_periods(expt)
-%             expt.featureMethod=method;
-%             expt.featureParam=methodpar;
-%             expt.featureExtras=varargin{:};
-            
-            %TODO: per-segment toggle
+        function detect_periods(expt)            
             extras=expt.featureExtras;
             if expt.featuresPerSegment
                 for i=1:expt.nS
@@ -1064,13 +1029,13 @@ classdef Experiment < handle & matlab.mixin.Copyable
             for i=1:expt.nS
                 thisIx=expt.segment(i).ix;
                 DT=expt.Xdetrend(thisIx,:);
-                DT=DT-mean(DT,1);
+                DT=DT-mean(DT,1); %subtract the mean to remove power at zero Hz
                 [PSD1,F,Pmax1,fmax1]=powerSpectrumOscar(DT, expt.fs, nsamp);
                 Tpsd1=1./fmax1;
                 expt.psd(:,:,i)=PSD1;
                 
                 DTF=expt.Xfilt(thisIx,:);
-                DTF=DTF-mean(DTF,1);
+                DTF=DTF-mean(DTF,1); %subtract the mean to remove power at zero Hz
                 [PSD2,~,Pmax2,fmax2]=powerSpectrumOscar(DTF,expt.fs, nsamp);
                 Tpsd2=1./fmax2;
                 expt.psdFilt(:,:,i)=PSD2;
@@ -1310,12 +1275,16 @@ classdef Experiment < handle & matlab.mixin.Copyable
                 stops=endpoints(2:2:end);
                 hseg_start=findobj(ax.Children,'tag','seg_start_line');
                 hseg_stop=findobj(ax.Children,'tag','seg_stop_line');
-                for i=1:expt.nS-1
-%                     set(hseg_start(i),'YData',ylim(ax))
-%                     set(hseg_stop(i),'YData',ylim(ax))
-                    set(hseg_start(i),'XData',[1,1]*starts(i+1),'YData',ylim(ax))
+                for i=1:expt.nS
+                    set(hseg_start(i),'XData',[1,1]*starts(i),'YData',ylim(ax))
                     set(hseg_stop(i),'XData',[1,1]*stops(i),'YData',ylim(ax))
                 end
+%                 for i=1:expt.nS-1
+% %                     set(hseg_start(i),'YData',ylim(ax))
+% %                     set(hseg_stop(i),'YData',ylim(ax))
+%                     set(hseg_start(i),'XData',[1,1]*starts(i+1),'YData',ylim(ax))
+%                     set(hseg_stop(i),'XData',[1,1]*stops(i),'YData',ylim(ax))
+%                 end
 %                     line(ax(j),[1,1]*starts(i+1),ylim,'color',[0,0.75,0],'tag','seg_start_line')
 %                     line(ax(j),[1,1]*stops(i),ylim,'color',[0.75,0,0],'tag','seg_stop_line')
                 
@@ -1334,8 +1303,8 @@ classdef Experiment < handle & matlab.mixin.Copyable
                 ax(i)=subplot(expt.nS,1,i);
 %                 axes(ax(i))
 %                 psd=expt.psd(:,expt.tix,i);
-                psd=[expt.psd(:,expt.tix,i),expt.psdFilt(:,expt.tix,i)];
-                line(ax(i),expt.f,psd,'tag','oscar_line'); 
+                seg_psd=[expt.psd(:,expt.tix,i),expt.psdFilt(:,expt.tix,i)];
+                line(ax(i),expt.f,seg_psd,'tag','oscar_line'); 
                 title(ax(i),expt.segment(i).name)
                 axis(ax(i),'tight')
             end     
@@ -1440,11 +1409,11 @@ classdef Experiment < handle & matlab.mixin.Copyable
                 end
                 if ~isempty(XX{i})
                     if (expt.include(expt.tix))
-                    hl(i,1)=line(XX{i},YY{i},'marker','o','linestyle','-',...
-                        'color',col,'tag','oscar_line');
+                        hl(i,1)=line(XX{i},YY{i},'marker','o','linestyle','-',...
+                            'color',col,'tag','oscar_line');
                     else
-                    hl(i,1)=line(XX{i},YY{i},'marker','x','linestyle','-',...
-                        'color',col,'tag','oscar_line');
+                        hl(i,1)=line(XX{i},YY{i},'marker','x','linestyle','-',...
+                            'color',col,'tag','oscar_line');
                     end
                     if i<expt.nS
                         hl2(i,1)=line([XX{i}(end),XX{i+1}(1)],[YY{i}(end),YY{i+1}(1)], ...
@@ -1541,25 +1510,47 @@ classdef Experiment < handle & matlab.mixin.Copyable
             
             %line segment below markers:
             if expt.nS>1
-                line(XX,YY,'color',[0.5,0.5,0.5],'linestyle','-','tag','oscar_line');
-                line(HX,HY,'color','k','linestyle','-','linewidth',1.5,'tag','oscar_line');
+                line(XX(:,~expt.include),YY(:,~expt.include),'color',[0.85,0.85,0.85],'linestyle','-','tag','oscar_line');
+                line(XX(:,expt.include),YY(:,expt.include),'color',[0.5,0.5,0.5],'linestyle','-','tag','oscar_line');
+
+                hlh=line(HX,HY,'color','k','linestyle','-','linewidth',2,'tag','oscar_line');
+            end
+            if ~expt.include(expt.tix)
+                hlh.Color = [0.5,0.5,0.5];
             end
             
             %markers
-            
             ax.ColorOrderIndex=1;
             hmAll=line(XX(:,expt.include)',YY(:,expt.include)','marker','o',...
                 'linestyle','none','tag','oscar_line');
             
+            ax.XLim=[min(XX(:,expt.include),[],"all"),max(XX(:,expt.include),[],"all")] .* [0.9,1.1];
+            ax.YLim=[min(YY(:,expt.include),[],"all"),max(YY(:,expt.include),[],"all")] .* [0.9,1.1];
+
             hmAllex=line(XX(:,~expt.include)',YY(:,~expt.include)','marker','x',...
                 'linestyle','none','tag','oscar_line');
             
-            axis tight
-            
             for i=1:expt.nS
-                line(HX(i),HY(i),'marker','o','linestyle','none',...
-                    'color',hmAll(i).Color,'markerfacecolor',hmAll(i).Color,'tag','oscar_line');
+                hmAllex(i).Color = (hmAllex(i).Color+1)/2;
+
+                if expt.include(expt.tix)
+                    line(HX(i),HY(i),marker='o',linestyle='none',linewidth=2,...
+                        color=hmAll(i).Color, tag='oscar_line');
+                else
+                    line(HX(i),HY(i),marker='x',linestyle='none',linewidth=2.5,color=hmAllex(i).Color, tag='oscar_line');
+                end
             end
+
+            % axis tight
+            
+            if (xfeat=="periodMean"||xfeat=="Tpsd") && (yfeat=="periodMean"||yfeat=="Tpsd")
+                line(xlim,xlim,'color','k','linestyle','--','tag','oscar_line')
+            end
+            
+            % for i=1:expt.nS
+            %     line(HX(i),HY(i),'marker','o','linestyle','none',...
+            %         'color',hmAll(i).Color,'markerfacecolor',hmAll(i).Color,'tag','oscar_line');
+            % end
             
 %             for i=1:expt.nS
 %                 ax.ColorOrderIndex=i;
@@ -1580,14 +1571,11 @@ classdef Experiment < handle & matlab.mixin.Copyable
                 xlim([0.5,expt.nS+0.5])
             end
             
-            if (xfeat=="periodMean"||xfeat=="Tpsd") && (yfeat=="periodMean"||yfeat=="Tpsd")
-                line(xlim,xlim,'tag','oscar_line')
-            end
-            
             xlabel(xfeat)
             ylabel(yfeat)
             
         end
+        
         
         function updatePlots(expt,type)
             
@@ -1595,7 +1583,9 @@ classdef Experiment < handle & matlab.mixin.Copyable
                 type='all';
             end
             
-            if ~isempty(expt.fig_handles)
+            if isempty(expt.fig_handles)
+                return
+            end
                 
             for i=1:length(expt.fig_handles)
                 thisfig=expt.fig_handles(i);
@@ -1610,7 +1600,7 @@ classdef Experiment < handle & matlab.mixin.Copyable
                             showPts=figData{3};
 
                             nPlots=length(whichPlot);
-                            ax=thisfig.Children;
+                            ax=thisfig.Children.Children;
                             for j=1:nPlots
                                 axes(ax(nPlots+1-j));
                                 expt.plot_t(whichPlot{j},showPts)
@@ -1628,13 +1618,13 @@ classdef Experiment < handle & matlab.mixin.Copyable
                                     expt.plot_features_trace();
                             end
                         case 'results'
-                            
+                            expt.buildResultsTable()
+                            expt.displayResults()
                     end
                 end
             end
             
             figure(expt.active_fig);
-            end
             
         end
         
@@ -1691,15 +1681,13 @@ classdef Experiment < handle & matlab.mixin.Copyable
                     expt.preprocess()
                     expt.compute_features()
                     expt.updatePlots()
-                    expt.displayResults(0)
                     
                 case 'i'
                     %toggle include
                     expt.include(expt.tix)=~expt.include(expt.tix);
                     
                     expt.updatePlots('feature')
-                    expt.buildResultsTable()
-                    expt.displayResults(0)
+                    expt.updatePlots('results')
                     
                 case 'p'
                     %parameter dialog
@@ -1718,27 +1706,13 @@ classdef Experiment < handle & matlab.mixin.Copyable
                     
                 case 's'
                     %save results
-%                     expt.writeToExcel()
+                    expt.writeToExcel()
                     expt.saveResults()
                     
                     
             end
         end
-        
-        function figureCloseFcn(expt,~,~)
-            thisfig=gcf;
-%             expt.gobj_array(ismember(expt.gobj_array, thisfig.Children))=[];
-            expt.fig_handles(ismember(expt.fig_handles,thisfig))=[];
-            delete(thisfig)
-        end
-        
-        function resfigCloseFcn(expt,~,~)
-            thisfig=gcf;
-            if isequal(expt.resfig,thisfig) 
-                expt.resfig=[];
-                delete(thisfig)
-            end
-        end
+
         
         function selectFeaturesPopup(expt)
             
@@ -1869,7 +1843,7 @@ classdef Experiment < handle & matlab.mixin.Copyable
                     expt.preprocess();
                     expt.compute_features();
                     expt.updatePlots()
-                    expt.displayResults(0);
+                    % expt.displayResults(0);
                 end
             end
         end
@@ -1877,9 +1851,6 @@ classdef Experiment < handle & matlab.mixin.Copyable
         function quit(expt)
             if ~isempty(expt.fig_handles)
                 close(expt.fig_handles)
-            end
-            if ~isempty(expt.resfig)
-                close(expt.resfig)
             end
             if ~isempty(expt.featureSelectDlg)
                 close(expt.featureSelectDlg)

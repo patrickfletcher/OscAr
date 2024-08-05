@@ -1,4 +1,9 @@
 function DY = slopeY(t,Y,boundaryMethod)
+arguments
+    t
+    Y
+    boundaryMethod="order1"
+end
 % central difference approximation for the slope of Y that handles unequal
 % spacing.
 
@@ -8,10 +13,6 @@ function DY = slopeY(t,Y,boundaryMethod)
 
 
 % centDiff=@(xp1,xm1) (xp1-xm1) / (hp1+h);
-
-if ~exist('boundaryMethod','var')
-    boundaryMethod='order1';
-end
 
 DY=zeros(size(Y));
 
