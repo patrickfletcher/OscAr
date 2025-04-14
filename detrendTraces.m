@@ -55,6 +55,18 @@ switch lower(method)
 
     case {'exp'}
         %fit exponential curve as trend
+        opts = statset("nlinfit"); 
+        opts.RobustWgtFun="cauchy";
+        opts.TolFun = 1e-12; opts.TolX = 1e-12;
+        % modelfun = @(b, t) b(1).*exp(b(2).*t);
+        % modelfun = @(b, t) b(1) + exp(b(2).*t);
+        % beta0 = [1, 0];
+        modelfun = @(b, t) b(1) + b(2).*exp(b(3).*t);
+        for i=1:nX
+        beta0 = [0, X(1,i), -1e-3];
+            beta = nlinfit(t, X(:,i), modelfun, beta0, opts);
+            XTrend(:,i)=modelfun(beta, t);
+        end
 
     case {'ptile'}
         %use a moving window prctile
