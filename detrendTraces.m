@@ -1,7 +1,15 @@
-function [Xdetrend,XTrend]=detrendTraces(t,X,method,methodparam,doPlot)
+function [Xdetrend,XTrend]=detrendTraces(t,X,method,methodparam,doPlot, opts)
 % DETRENDTRACES detrend the columns of X using various methods
-
-% TODO: finish error checking, documentation
+arguments
+    t
+    X
+    method
+    methodparam
+    doPlot=0
+    opts.steepness=0.85;
+    opts.stopAtten=60;
+    opts.doPlot = 0
+end
 
 % TODO: no inputs - return cell array of possible methods with their possible params
 %  {{method},{methodpar}}
@@ -11,12 +19,8 @@ nX=size(X,2);
 dt=mode(diff(t));
 fs=1/dt; 
 
-if ~exist('doPlot','var')
-    doPlot=0;
-end
-
-steepness=0.5;
-stopAtten=90;
+steepness=opts.steepness;
+stopAtten=opts.stopAtten;
 
 XTrend=zeros(size(X));
 switch lower(method)
@@ -48,6 +52,9 @@ switch lower(method)
         for i=1:nX
             XTrend(:,i)=polyval(polyfit(t,X(:,i),degree),t);
         end
+
+    case {'exp'}
+        %fit exponential curve as trend
 
     case {'ptile'}
         %use a moving window prctile
@@ -81,8 +88,8 @@ switch lower(method)
             fpass=methodparam;
         end
         
-%         XTrend=lowpass(X,fpass,fs,'ImpulseResponse','iir');
-        XTrend=lowpass(X,fpass,fs,'ImpulseResponse','iir','Steepness',steepness,'StopbandAttenuation',stopAtten);
+        % XTrend=lowpass(X,fpass,fs);
+        XTrend=lowpass(X,fpass,fs,'ImpulseResponse','auto','Steepness',steepness,'StopbandAttenuation',stopAtten);
     
     case {'highpass'}
         
@@ -93,8 +100,9 @@ switch lower(method)
             fpass=methodparam;
         end
         
-        Xdetrend=highpass(X,fpass,fs,'ImpulseResponse','iir','Steepness',steepness,'StopbandAttenuation',stopAtten);
-        XTrend=X-Xdetrend;
+        % Xhi=highpass(X,fpass,fs);
+        Xhi=highpass(X,fpass,fs,'ImpulseResponse','auto','Steepness',steepness,'StopbandAttenuation',stopAtten);
+        XTrend=X-Xhi;
 
     case {'movmean','movmedian','gaussian','lowess','loess','rlowess','rloess','sgolay'}
         
@@ -113,6 +121,9 @@ switch lower(method)
         wsz=round(wwidth/dt);
         wsz=max(wsz,1);
         XTrend=smoothdata(X,method,wsz);
+
+    otherwise
+        error(['unknown method: ' method]);
 end
 
 Xdetrend=X-XTrend;
@@ -122,7 +133,6 @@ Xdetrend=X-XTrend;
 %plot to show result
 if nargout==0 || doPlot==1
     
-nX=size(X,2);
 tix=1;
 figure('Name','Detrend Traces','KeyPressFcn',@keypressFcn);
 plotData()

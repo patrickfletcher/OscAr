@@ -1,22 +1,26 @@
-function [XFilt,tfilt]=filterTraces(t,X,method,methodparam,doPlot)
+function [XFilt,tfilt]=filterTraces(t,X,method,methodparam,doPlot,opts)
 
-% TODO: finish error checking, documentation
+arguments
+    t
+    X
+    method
+    methodparam
+    doPlot=0
+    opts.steepness=0.85;
+    opts.stopAtten=60;
+    opts.doPlot = 0
+end
 
 % TODO: no inputs - return cell array of possible methods with their possible params
 %  {{method},{methodpar}}
 
+nX=size(X,2);
+
 dt=mode(diff(t));
 fs=1/dt; 
 
-% if ~exist('doTrim','var')
-%     doTrim=0;
-% end
-if ~exist('doPlot','var')
-    doPlot=0;
-end
-
-steepness=0.85;
-stopAtten=60;
+steepness=opts.steepness;
+stopAtten=opts.stopAtten;
 
 tfilt=t;
 switch lower(method)
@@ -46,6 +50,7 @@ switch lower(method)
             fpass=methodparam;
         end
         
+%         XFilt=lowpass(X,fpass,fs);
 %         XFilt=lowpass(X,fpass,fs,'ImpulseResponse','iir');
         XFilt=lowpass(X,fpass,fs,'ImpulseResponse','auto','Steepness',steepness,'StopbandAttenuation',stopAtten);
        
@@ -58,7 +63,8 @@ switch lower(method)
             fpass=methodparam;
         end
         
-%         XFilt=lowpass(X,fpass,fs,'ImpulseResponse','iir');
+%         XFilt=highpass(X,fpass,fs);
+%         XFilt=highpass(X,fpass,fs,'ImpulseResponse','iir');
         XFilt=highpass(X,fpass,fs,'ImpulseResponse','auto','Steepness',steepness,'StopbandAttenuation',stopAtten);
     
     case {'bandpass'}
@@ -71,21 +77,18 @@ switch lower(method)
             fpass=methodparam;
         end
         
-%         XFilt=bandpass(X,fpass,fs,'ImpulseResponse','iir');
-        XFilt=bandpass(X,fpass,fs,'ImpulseResponse','auto','Steepness',steepness,'StopbandAttenuation',stopAtten);
+        XFilt=bandpass(X,fpass,fs);
+        % XFilt=bandpass(X,fpass,fs,'ImpulseResponse','auto');
+        % XFilt=bandpass(X,fpass,fs,'ImpulseResponse','auto','Steepness',steepness,'StopbandAttenuation',stopAtten);
+        
+    otherwise
+        error(['unknown method: ' method]);
 end
-
-% if doTrim
-%     wsz2=ceil(wsz/2);
-%     tfilt=tfilt(wsz2:end-wsz2+1);
-%     XFilt=XFilt(wsz2:end-wsz2+1,:);
-% end
 
 
 %plot to show result
 if nargout==0 || doPlot==1
     
-nX=size(X,2);
 tix=1;
 figure('Name','Filter Traces','KeyPressFcn',@keypressFcn);
 plotData()

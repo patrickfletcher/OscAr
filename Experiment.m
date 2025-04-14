@@ -1,9 +1,6 @@
 classdef Experiment < handle & matlab.mixin.Copyable
     %class to represent a single experiment containing >=1 timeseries that share the same time sample points. For
     %example, a fluorescence videomicroscopy experiment with multiple ROIs in a field of view. 
-
-    
-    %TODO: Force user to load data into Matlab? data=[t,X];
         
     %TODO: get valid options for preprocessing functions exported from those
     %functions to display in dropdown lists
@@ -16,51 +13,56 @@ classdef Experiment < handle & matlab.mixin.Copyable
     %TODO: plot mean+/- stdev for per-trace features, when these are distrubtions for the trace. or boxplot. or violin.
     %if so, remove the stdev from features to plot list
     
-    %TODO: finalize private/public properties and methods for full OOP
+    %TODO: OOP. Think overall UX - what outputs do we need to access easily?
+    % - finalize private/public properties and methods for full 
+    % - Project as class
+    % - rename this as Recording?
+    % - Segment as class [name, ix/endpoints, ??]
+
+    % - PreprocessingMethod -> has parameters as properites and operation as class method
+    % -- this means could make a list of them
+    % -- common abstraction would allow easier integration with UI: they all have table of param names/values?
 
     %TODO: separate the plotting/UI from data ops?
     
-    %TODO: support 3D array - 3rd dim is observable id (one [nT x nX] page per observable)
-    % this requires supporting different pipeline options for each
-    % observable and allows computation of new higher order features,
-    % such as phase relationship
-    % --> actually, will likely determine period markers using only one
-    % observable, then compute features relative to those markers in
-    % other traces?
-    
     properties 
+
+        filename=''
+        fullfilename=''
+        notes={}
+        t_mark=[]
+        
+        % *** move metadata to an enclosing class
         name=''
         date=''
         sex=''
         condition='' %eg. WT vs KO
-        filename=''
-        fullfilename=''
-        notes={}
-        
+
         %segment is a subinterval of the trace, the basic unit within which
         %periodicity will be detected and features will be computed
+        % *** make this a class
         nS
         segment=struct('name','','endpoints',[],'ix',[],...
             'points',struct(),'features_periods',struct(),'features_trace',struct())
         
+        %timeseries
         t
         dt
         fs %1/dt
         f
         psd
         psdFilt
-        
         X
         nX
-        includeT %place to store trace-wise include vector
-        
         traceID %from original file
+
+        % support grouping similar traces into an average (e.g. cells in one islet)
+        groupMode=false
         groupT
         groupID
         nG
+        includeT %place to store trace-wise include vector
         includeG %groupwise include vector
-        
-        groupMode=false
         
         featureFcn %not used?
         fnames_periods
@@ -69,11 +71,11 @@ classdef Experiment < handle & matlab.mixin.Copyable
         resultsTrace=table
         resultsPeriod=table
         
-        
         %private (?):
         N
         group
         include
+        has_osc
         Xnorm
         Xtrend
         Xdetrend
@@ -82,6 +84,7 @@ classdef Experiment < handle & matlab.mixin.Copyable
     end
     
     %store parameters used
+    % *** abstraction?
     properties
         normMethod='none'
         normParam=[]
@@ -108,7 +111,7 @@ classdef Experiment < handle & matlab.mixin.Copyable
         interpMethod='linear'
         
         Tab=table;
-        resultsFile='';
+        resultsFile=[];
     end
     
     properties (SetAccess=protected)
@@ -269,6 +272,7 @@ classdef Experiment < handle & matlab.mixin.Copyable
             expt.setGroup(ones(1,expt.nX));
             
             expt.tix=1;
+            expt.t_mark = t_mark;
              
         end
         
@@ -624,11 +628,11 @@ classdef Experiment < handle & matlab.mixin.Copyable
                     line(ax(j),nan,nan,'color','r','marker','v','linestyle','none','tag','max_line')
                     line(ax(j),nan,nan,'color','g','marker','<','linestyle','none','tag','dxmin_line')
                     line(ax(j),nan,nan,'color','g','marker','>','linestyle','none','tag','dxmax_line')
-                    line(ax(j),nan,nan,'color','b','marker','d','linestyle','none','tag','up_line')
                     line(ax(j),nan,nan,'color','b','marker','o','linestyle','none','tag','down_line')
                     line(ax(j),nan,nan,'color','b','marker','s','linestyle','none','tag','period_line')
                 % end
                 % for i=1:expt.nS-1
+                    line(ax(j),nan,nan,'color',[0,0,0.75],'linestyle','--','tag','mark_line')
                     line(ax(j),nan,nan,'color',[0,0.75,0],'tag','seg_start_line')
                     line(ax(j),nan,nan,'color',[0.75,0,0],'tag','seg_stop_line')
                 end
@@ -881,6 +885,7 @@ classdef Experiment < handle & matlab.mixin.Copyable
             thisInfo.featureParam=repmat(expt.featureParam,expt.nS*expt.nX,1);
             % thisInfo.minAmp=repmat(expt.featureExtras{1}.MinimumAmplitude,expt.nS*expt.nX,1);
 
+            expt.buildResultsTable();
             thisResult=expt.resultsTrace(:,3:end);
 
             segNames=[expt.segment(:).name]';
@@ -943,15 +948,15 @@ classdef Experiment < handle & matlab.mixin.Copyable
             writetable(expt.resultsTrace,outfilename);
         end
 
-    end
-    
-    methods (Access=private)
         
         function figureCloseFcn(expt,~,~)
             thisfig=gcf;
             expt.fig_handles(ismember(expt.fig_handles,thisfig))=[];
             delete(thisfig)
         end
+    end
+    
+    methods (Access=private)
 
         function clearFigs(expt)
             expt.active_fig=matlab.ui.Figure.empty;
@@ -1028,7 +1033,8 @@ classdef Experiment < handle & matlab.mixin.Copyable
             
             for i=1:expt.nS
                 thisIx=expt.segment(i).ix;
-                DT=expt.Xdetrend(thisIx,:);
+                DT=expt.Xnorm(thisIx,:);
+                % DT=expt.Xdetrend(thisIx,:);
                 DT=DT-mean(DT,1); %subtract the mean to remove power at zero Hz
                 [PSD1,F,Pmax1,fmax1]=powerSpectrumOscar(DT, expt.fs, nsamp);
                 Tpsd1=1./fmax1;
@@ -1040,14 +1046,14 @@ classdef Experiment < handle & matlab.mixin.Copyable
                 Tpsd2=1./fmax2;
                 expt.psdFilt(:,:,i)=PSD2;
                 
-                PSD=PSD1;
-                Pmax=Pmax1;
-                fmax=fmax1;
-                Tpsd=Tpsd1;
-%                 PSD=PSD2;
-%                 Pmax=Pmax2;
-%                 fmax=fmax2;
-%                 Tpsd=Tpsd2;
+                % PSD=PSD1;
+                % Pmax=Pmax1;
+                % fmax=fmax1;
+                % Tpsd=Tpsd1;
+                PSD=PSD2;
+                Pmax=Pmax2;
+                fmax=fmax2;
+                Tpsd=Tpsd2;
                 
                 PSD(1,:)=Pmax;
                 [~,~,points]=peak_detector(F, PSD, peakdelta);
@@ -1069,7 +1075,8 @@ classdef Experiment < handle & matlab.mixin.Copyable
                 [expt.segment(i).features_trace.fmax]=fmax{:};
                 [expt.segment(i).features_trace.Pmax]=Pmax{:};
                 [expt.segment(i).features_trace.Rp21]=Rp21{:};
-                
+                Ptot = num2cell(trapz(F,PSD1,1)');
+                [expt.segment(i).features_trace.Ptot]=Ptot{:};
             end
             expt.f=F; %frquency vector
         end
@@ -1173,7 +1180,6 @@ classdef Experiment < handle & matlab.mixin.Copyable
 %                 line(pts.max.t,pts.max.x,'color','r','marker','v','linestyle','none','tag','max_line')
 %                 line(pts.dxmin.t,pts.dxmin.x,'color','g','marker','<','linestyle','none','tag','dxmin_line')
 %                 line(pts.dxmax.t,pts.dxmax.x,'color','g','marker','>','linestyle','none','tag','dxmax_line')
-%                 line(pts.up.t,pts.up.x,'color','b','marker','d','linestyle','none','tag','up_line')
 %                 line(pts.down.t,pts.down.x,'color','b','marker','o','linestyle','none','tag','down_line')
 %                 line(pts.period.t,xPer,'color','b','marker','s','linestyle','none','tag','period_line')
 
@@ -1225,7 +1231,6 @@ classdef Experiment < handle & matlab.mixin.Copyable
                             hmax=findobj(ax.Children,'tag','max_line');
                             hdxmin=findobj(ax.Children,'tag','dxmin_line');
                             hdxmax=findobj(ax.Children,'tag','dxmax_line');
-                            hup=findobj(ax.Children,'tag','up_line');
                             hdown=findobj(ax.Children,'tag','down_line');
                             hperiod=findobj(ax.Children,'tag','period_line');
                             if length(pts.period.t)>1
@@ -1234,14 +1239,13 @@ classdef Experiment < handle & matlab.mixin.Copyable
                                     set(hmax(i),'XData',pts.max.t,'YData',pts.max.x)
                                     set(hdxmin(i),'XData',pts.dxmin.t,'YData',pts.dxmin.x)
                                     set(hdxmax(i),'XData',pts.dxmax.t,'YData',pts.dxmax.x)
-                                    set(hup(i),'XData',pts.up.t,'YData',pts.up.x)
+                                    set(hperiod(i),'XData',pts.up.t,'YData',pts.up.x)
                                     set(hdown(i),'XData',pts.down.t,'YData',pts.down.x)
                                     
 %                                     line(pts.min.t,pts.min.x,'color','r','marker','^','linestyle','none','tag','min_line')
 %                                     line(pts.max.t,pts.max.x,'color','r','marker','v','linestyle','none','tag','max_line')
 %                                     line(pts.dxmin.t,pts.dxmin.x,'color','g','marker','<','linestyle','none','tag','dxmin_line')
 %                                     line(pts.dxmax.t,pts.dxmax.x,'color','g','marker','>','linestyle','none','tag','dxmax_line')
-%                                     line(pts.up.t,pts.up.x,'color','b','marker','d','linestyle','none','tag','up_line')
 %                                     line(pts.down.t,pts.down.x,'color','b','marker','o','linestyle','none','tag','down_line')
                                     
             %                         tupdwn=[pts.up.t(1:length(pts.down.t)); pts.down.t];
@@ -1259,7 +1263,6 @@ classdef Experiment < handle & matlab.mixin.Copyable
                                 set(hmax(i),'XData',nan,'YData',nan)
                                 set(hdxmin(i),'XData',nan,'YData',nan)
                                 set(hdxmax(i),'XData',nan,'YData',nan)
-                                set(hup(i),'XData',nan,'YData',nan)
                                 set(hdown(i),'XData',nan,'YData',nan)
                                 set(hperiod(i),'XData',nan,'YData',nan)
                             end
@@ -1270,6 +1273,11 @@ classdef Experiment < handle & matlab.mixin.Copyable
                 ax.XLim=[min(expt.t),max(expt.t)];
                 ax.YLabel.String="X_{"+whichPlot+"}"+num2str(expt.tix);
                 
+                if ~isempty(expt.t_mark) %TODO could have more than one
+                    hmark_line=findobj(ax.Children,'tag','mark_line');
+                    set(hmark_line(i),'XData',[1,1]*expt.t_mark,'YData',ylim(ax))
+                end
+
                 endpoints=[expt.segment(:).endpoints];
                 starts=endpoints(1:2:end);
                 stops=endpoints(2:2:end);
@@ -1298,7 +1306,8 @@ classdef Experiment < handle & matlab.mixin.Copyable
 %             ax=flipud(ax);
 %             reset(ax)
             delete(findobj(gcf,'tag','oscar_line'));
-            
+           
+            maxFilt=-inf;
             for i=1:expt.nS
                 ax(i)=subplot(expt.nS,1,i);
 %                 axes(ax(i))
@@ -1307,13 +1316,11 @@ classdef Experiment < handle & matlab.mixin.Copyable
                 line(ax(i),expt.f,seg_psd,'tag','oscar_line'); 
                 title(ax(i),expt.segment(i).name)
                 axis(ax(i),'tight')
+                maxFilt = max(maxFilt, expt.segment(i).features_trace(expt.tix).fmax);
             end     
             xlabel('frequency')
             ylabel('power');
-            legend(ax(end),{'detrended','filtered'},'AutoUpdate','off')
-            
-            maxFilt=max([expt.segment(1).features_trace(expt.tix).fmax, ...
-                         expt.segment(2).features_trace(expt.tix).fmax]);
+            legend(ax(end),{'normalized','filtered'},'AutoUpdate','off')
 
             for i=1:expt.nS
                 x=expt.segment(i).features_trace(expt.tix).fmax;
@@ -1529,9 +1536,9 @@ classdef Experiment < handle & matlab.mixin.Copyable
 
             hmAllex=line(XX(:,~expt.include)',YY(:,~expt.include)','marker','x',...
                 'linestyle','none','tag','oscar_line');
-            
+
             for i=1:expt.nS
-                hmAllex(i).Color = (hmAllex(i).Color+1)/2;
+                % hmAllex(i).Color = (hmAllex(i).Color+1)/2;
 
                 if expt.include(expt.tix)
                     line(HX(i),HY(i),marker='o',linestyle='none',linewidth=2,...

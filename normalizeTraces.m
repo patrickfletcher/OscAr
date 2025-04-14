@@ -1,34 +1,21 @@
-function XNorm=normalizeTraces(t,X,method,methodparam,doPlot)
+function XNorm=normalizeTraces(t, X, method, methodparam, doPlot, opts)
 % NORMALIZETRACES centers and or scales X values by a variety of methods, columnwise
-%
-% some method options:
-%     'zscore' - (default) normalizes by centering the data to have mean 0
-%                and scaling it to have standard deviation 1.
-%  
-%     'unit'  - normalizes by rescaling the range of the data to the
-%                interval [0,1]. Optional param: [a,b] to set range other than [0,1].
-%
-%     'devmean' - (X-mean(X))/mean(X) 
-
-% TODO: finish error checking, documentation
 
 % TODO: no inputs - return cell array of possible methods with their possible params
 %  {{method},{methodpar}}
 
 % TODO: update plotting method to not rely on nested functions and be more efficient
 
-% if nargin==0
-%     displayHelp()
-% end
-
-if ~exist('method','var')
-    method='zscore';
-    methodparam=[];
+arguments
+    t
+    X
+    method
+    methodparam
+    doPlot=0
+    opts.doPlot = 0
 end
 
-if ~exist('doPlot','var')
-    doPlot=0;
-end
+nX=size(X,2);
 
 switch method
     case {'none'}
@@ -47,8 +34,8 @@ switch method
     case {'ptile'} %methodparam=[lo,hi] ptile
         p=prctile(X,methodparam,1);
         XNorm=(X-p(1,:))./abs(p(2,:)-p(1,:));
-        XNorm(XNorm<0)=0;
-        XNorm(XNorm>1)=1;
+        % XNorm(XNorm<0)=0;
+        % XNorm(XNorm>1)=1;
         
     case {'devmean'}
         XNorm=(X-mean(X,1))./mean(X,1);
@@ -112,7 +99,7 @@ switch method
                 XNorm=X./mean(X,1);
                 
             case {'stdev'}
-                XNorm=XNorm./std(X,[],1);
+                XNorm=X./std(X,[],1);
                 
             case {'median'}
                 XNorm=X./median(X,1);
@@ -124,10 +111,10 @@ switch method
                 XNorm=X./min(X,[],1);
                 
             case {'range'}
-                XNorm=XNorm./(max(X,[],1)-min(X,[],1));
+                XNorm=X./(max(X,[],1)-min(X,[],1));
                 
             case {'iqr'}
-                XNorm=XNorm./(prctile(X,25,1)-prctile(X,75,1));
+                XNorm=X./(prctile(X,25,1)-prctile(X,75,1));
                 
             otherwise
                 if isnumeric(methodparam) &&isscalar(methodparam)
@@ -176,19 +163,14 @@ switch method
 end
 
 
-
-
 %plot to show result
 if nargout==0 || doPlot==1
-    
-    nX=size(X,2);
     tix=1;
     fh=figure('name','Normalize Traces','KeyPressFcn',@keypressFcn);
     XLIM = [min(t), max(t)];
     YLIM = [min(X(:)), max(X(:))];
     YLIMn = [min(XNorm(:)), max(XNorm(:))];
     plotData()
-    axis tight
     
 end
 
