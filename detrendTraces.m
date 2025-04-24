@@ -57,7 +57,7 @@ switch lower(method)
         %fit exponential curve as trend
         opts = statset("nlinfit"); 
         opts.RobustWgtFun="cauchy";
-        opts.TolFun = 1e-12; opts.TolX = 1e-12;
+        % opts.TolFun = 1e-12; opts.TolX = 1e-12;
         % modelfun = @(b, t) b(1).*exp(b(2).*t);
         % modelfun = @(b, t) b(1) + exp(b(2).*t);
         % beta0 = [1, 0];
