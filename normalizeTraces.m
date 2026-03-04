@@ -20,6 +20,14 @@ nX=size(X,2);
 switch method
     case {'none'}
         XNorm=X;
+
+    case  {'first'}
+        n_first = 1;
+        if exist('methodparam','var')
+            n_first = methodparam;
+        end
+        mean_first = mean(X(1:n_first, :));
+        XNorm = X - mean_first;
         
     case {'zscore'}
         XNorm=(X-mean(X,1))./std(X,[],1);

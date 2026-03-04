@@ -912,7 +912,7 @@ classdef Experiment < handle & matlab.mixin.Copyable
         end
 
         
-        function writeToExcel(expt,outfilename,doDistributions)
+        function writeToExcel(expt,outfilename)
             %write a header region with file/experiment info
             %default: trace level (means/stdevs) features
             
@@ -1075,7 +1075,8 @@ classdef Experiment < handle & matlab.mixin.Copyable
                 [expt.segment(i).features_trace.fmax]=fmax{:};
                 [expt.segment(i).features_trace.Pmax]=Pmax{:};
                 [expt.segment(i).features_trace.Rp21]=Rp21{:};
-                Ptot = num2cell(trapz(F,PSD1,1)');
+                % Ptot = num2cell(trapz(F,PSD1,1)');
+                Ptot = num2cell(sum(PSD1,1)'); 
                 [expt.segment(i).features_trace.Ptot]=Ptot{:};
             end
             expt.f=F; %frquency vector

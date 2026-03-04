@@ -40,6 +40,18 @@ switch lower(method)
             XTrend(:,i)=brob(1)+brob(2)*t;
         end
 
+    case {'quadratic'}
+        
+        for i=1:nX
+            XTrend(:,i)=polyval(polyfit(t,X(:,i),2),t);
+        end
+
+    case {'cubic'}
+        
+        for i=1:nX
+            XTrend(:,i)=polyval(polyfit(t,X(:,i),3),t);
+        end
+
     case {'poly','polynomial'}
         
         %methodparam=degree of polynomial
@@ -56,16 +68,19 @@ switch lower(method)
     case {'exp'}
         %fit exponential curve as trend
         opts = statset("nlinfit"); 
-        opts.RobustWgtFun="cauchy";
+        opts.Robust = "on";
+        % opts.RobustWgtFun = 'bisquare';
+        % opts.RobustWgtFun="cauchy";
+        opts.MaxIter = 500;
         % opts.TolFun = 1e-12; opts.TolX = 1e-12;
-        % modelfun = @(b, t) b(1).*exp(b(2).*t);
-        % modelfun = @(b, t) b(1) + exp(b(2).*t);
-        % beta0 = [1, 0];
-        modelfun = @(b, t) b(1) + b(2).*exp(b(3).*t);
+        modelfun = @(b, t) b(1).*exp(b(2).*t);
+        % modelfun = @(b, t) b(1) + b(2).*exp(-b(3).*t);
         for i=1:nX
-        beta0 = [0, X(1,i), -1e-3];
-            beta = nlinfit(t, X(:,i), modelfun, beta0, opts);
-            XTrend(:,i)=modelfun(beta, t);
+            % beta0 = [X(1,i), 1e-3];
+            % beta = nlinfit(t, X(:,i), modelfun, beta0, opts)
+            % XTrend(:,i)=modelfun(beta, t);
+            cfit=fit(t,X(:,i), "exp1", ConstraintPoints=[t([1,end]), X([1,end],i)])
+            XTrend(:,i)=feval(cfit, t);
         end
 
     case {'ptile'}
